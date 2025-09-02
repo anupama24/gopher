@@ -244,54 +244,54 @@ def main():
     optTot = args.optTot #10e-6
     max_iter = args.itr #50
 
-#     for eps_itr in eps_all:
+    for eps_itr in eps_all:
 
-#         eps_temp =eps_itr  - eps1
-#         print(f"Running for eps={eps_itr}",flush=True)
-#         sol = opt_dca(Q1,B,Q2, sz_y,sz_yhat, eps_temp ,max_iter,optTot,num_chunks)
+        eps_temp =eps_itr  - eps1
+        print(f"Running for eps={eps_itr}",flush=True)
+        sol = opt_dca(Q1,B,Q2, sz_y,sz_yhat, eps_temp ,max_iter,optTot,num_chunks)
 
-#         priv_Y = save_QP_Yhat(sol,Y_full,Y_uniq,Y_hat,seed,chunks)
+        priv_Y = save_QP_Yhat(sol,Y_full,Y_uniq,Y_hat,seed,chunks)
         
-#         outFile = f"MultiQP_Priv_sample_{sam}_eps_{eps_itr}_{pheno_name}.txt"
+        outFile = f"MultiQP_Priv_sample_{sam}_eps_{eps_itr}_{pheno_name}.txt"
         
-#         if os.path.isfile(outFile):
-#             pc_df= pd.read_csv(outFile, sep='\t', index_col=0)
-#             pc_df.index = pc_df.index.astype(str)
-#             is_in_set = pc_df['IID'].isin(id_set)
-#             row_numbers =  np.where(~is_in_set)[0]
-#             # pc_df = pc_df[pc_df.columns]
-#             # pc_df['IID'] = pc_df.index.copy()   
-#             print(pc_df.head(),flush=True)
+        if os.path.isfile(outFile):
+            pc_df= pd.read_csv(outFile, sep='\t', index_col=0)
+            pc_df.index = pc_df.index.astype(str)
+            is_in_set = pc_df['IID'].isin(id_set)
+            row_numbers =  np.where(~is_in_set)[0]
+            # pc_df = pc_df[pc_df.columns]
+            # pc_df['IID'] = pc_df.index.copy()   
+            print(pc_df.head(),flush=True)
             
-#         else:
-#             pheno_df = load_phenotype(phenoFile,sample_subset=None)
-#             pheno_df.index = pheno_df.index.astype(str)
+        else:
+            pheno_df = load_phenotype(phenoFile,sample_subset=None)
+            pheno_df.index = pheno_df.index.astype(str)
             
-#             pc_df = pd.DataFrame(index=pheno_df.index.copy())
-#             pc_df.insert(0,'FID','')
-#             pc_df.insert(1,'IID','')
-#             pc_df['FID'] = pheno_df.index.copy()
-#             pc_df['IID'] = pheno_df.index.copy()   
-#             pc_df = pc_df.set_index("FID")
-#             pc_df[pheno_name] = np.nan
+            pc_df = pd.DataFrame(index=pheno_df.index.copy())
+            pc_df.insert(0,'FID','')
+            pc_df.insert(1,'IID','')
+            pc_df['FID'] = pheno_df.index.copy()
+            pc_df['IID'] = pheno_df.index.copy()   
+            pc_df = pc_df.set_index("FID")
+            pc_df[pheno_name] = np.nan
         
-#         # pheno_df.reset_index(drop=True, inplace=True)
+        # pheno_df.reset_index(drop=True, inplace=True)
         
-#         if samLPFile is not None:
-#             pc_df[pheno_name].update(lp_df[pheno_name])
-#             # pc_df[pheno_name] =  multi_Y_priv
-#             pc_df.loc[pheno_df.iloc[row_numbers].index.astype(str), pheno_name] = priv_Y
-#         else:
-#             pc_df[pheno_name] = priv_Y
+        if samLPFile is not None:
+            pc_df[pheno_name].update(lp_df[pheno_name])
+            # pc_df[pheno_name] =  multi_Y_priv
+            pc_df.loc[pheno_df.iloc[row_numbers].index.astype(str), pheno_name] = priv_Y
+        else:
+            pc_df[pheno_name] = priv_Y
             
-#         print(pc_df.columns,flush=True)
-#         print(len(pc_df),flush=True)
+        print(pc_df.columns,flush=True)
+        print(len(pc_df),flush=True)
         
-#         pc_df.to_csv(outFile, sep="\t", na_rep='NA',index=True)
-#         print(f"Multiple QP for {eps_itr} done",flush=True)
+        pc_df.to_csv(outFile, sep="\t", na_rep='NA',index=True)
+        print(f"Multiple QP for {eps_itr} done",flush=True)
 
 
-#     print(f"GOPHER-QP mechanism for {pheno_name} done",flush=True)
+    print(f"GOPHER-QP mechanism for {pheno_name} done",flush=True)
 
 
 	 
