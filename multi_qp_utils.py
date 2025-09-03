@@ -249,8 +249,8 @@ def compute_partial_C_for_row(args):
     for j in range(len(K_row)): 
         if K_row[j] == 0.0:
             continue
-        # H = method2(corr_ij[j],var,mean_i,mean_j[j],U,inter)
-        H = joint_prob_dist(corr_ij[j],U,var,mean_i,mean_j[j],inter)
+        H = method2(corr_ij[j],var,mean_i,mean_j[j],U,inter)
+        # H = joint_prob_dist(corr_ij[j],U,var,mean_i,mean_j[j],inter)
         C += (K_row[j] * H)
     
     return C
