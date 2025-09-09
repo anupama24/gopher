@@ -11,6 +11,7 @@ from cvxopt import solvers, matrix, spmatrix, mul,spdiag
 from collections import Counter
 from sklearn.cluster import KMeans
 from scipy.sparse.linalg import eigsh
+from scipy.special import logsumexp
 # import torch
 
 # from numba import njit,prange
@@ -47,25 +48,26 @@ def sample_pre_process(Xarr,Y_full,bins,mean_dp,var_dp,num_chunks,seed,pheno):
     print(f'GRM size : {K.shape}', flush=True)
     diag = np.diag(K)
 
-    # Zero out near-zero values
-    threshold = 1e-6
-    K[np.abs(K) < threshold] = 0.0
+    # # Zero out near-zero values
+    # threshold = 1e-6
+    # K[np.abs(K) < threshold] = 0.0
 
     
     B = []
     A = []
     block_matrix = [[None for _ in range(num_chunks)] for _ in range(num_chunks)]
+    tol = 1e-8
 
     for i in range(num_chunks):
         for j in range(i, num_chunks):             # Only compute upper triangle + diagonal
             ixgrid = np.ix_(chunks[i],chunks[j])
-            di = diag[chunks[i]]  # shape: (ni,)
-            dj = diag[chunks[j]]  # shape: (nj,)
 
+            di = np.sqrt(diag[chunks[i]] + tol)[:, None]  # shape: (ni, 1)
+            dj = np.sqrt(diag[chunks[j]] + tol)[None, :]  # shape: (1, nj)
             # Normalize Ki → Ycorr
-            Ycorr = K[ixgrid] / np.sqrt(di)[:, None]
-            Ycorr = Ycorr / np.sqrt(dj)[None, :]
+            Ycorr = K[ixgrid] / (di * dj)
             Ycorr = np.clip(Ycorr, -1.0, 1.0)
+
             zero_diag = (i == j)                  # diagonal chunk, pass zero_diag=True
             Aij = compute_A_for_chunk(K[ixgrid], Ycorr, diff_yy, Y_uniq, var_dp,
                                                   mean_dp[chunks[i]], mean_dp[chunks[j]], d, zero_diag)
@@ -240,19 +242,30 @@ def compute_partial_C_for_row(args):
     # i,K,corr_ij,U,mean_x,mean_y,var,inter = args
 
     sz_y,sz_yhat = U.shape
-    C = np.zeros((sz_y,sz_yhat),dtype=np.float32)
-    if zero_diag:
-        if i < len(K_row):
-            K_row = K_row.copy()  
-            K_row[i] = 0.0 
+    # C = np.zeros((sz_y,sz_yhat),dtype=np.float32)
+    logC = np.full((sz_y, sz_yhat), -np.inf, dtype=np.float64)
+
+    if zero_diag and i < len(K_row):
+        K_row = K_row.copy()  
+        K_row[i] = 0.0 
 
     for j in range(len(K_row)): 
         if K_row[j] == 0.0:
             continue
-        H = method2(corr_ij[j],var,mean_i,mean_j[j],U,inter)
-        # H = joint_prob_dist(corr_ij[j],U,var,mean_i,mean_j[j],inter)
-        C += (K_row[j] * H)
+        # H = method2(corr_ij[j],var,mean_i,mean_j[j],U,inter)
+        # # H = joint_prob_dist(corr_ij[j],U,var,mean_i,mean_j[j],inter)
+        # C += (K_row[j] * H)
+        
+        log_H = joint_log_prob_dist(corr_ij[j], U, var, mean_i, mean_j[j], inter)
+        log_K = np.log(K_row[j])
+        log_weighted = log_K + log_H
+
+        # log-sum-exp accumulate into logC
+        logC = np.logaddexp(logC, log_weighted)
     
+    # Convert back to normal space at the end
+    C = np.exp(logC).astype(np.float32)
+
     return C
 
 
@@ -329,9 +342,9 @@ def opt_dca(A,B,E,sz_y,sz_yhat,eps,max_iter,optTol,num_chunks):
         qopt = matrix(np.ravel(newB))
         print("Popt max:", np.max(Popt), "min:", np.min(Popt),flush=True)
         print("qopt max:", np.max(qopt), "min:", np.min(qopt))
-        print("Gopt shape:", Gopt.size,flush=True)
+        # print("Gopt shape:", Gopt.size,flush=True)
         
-        # solvers.options['show_progress'] = True
+        solvers.options['show_progress'] = False
         
         sol = solvers.qp(Popt,qopt,Gopt,hopt,Aopt,bopt)
         
@@ -486,3 +499,31 @@ def joint_prob_dist(corr,U,var,meanx,meany,inter):
     num = np.exp(-num/(2*var*(1-corr**2)))
     pdf = num /denom
     return pdf * inter**2 
+
+"""
+Computes log of joint PDF of a bivariate normal distribution.
+Returns log(PDF) + log(inter^2), for later log-space accumulation.
+"""
+def joint_log_prob_dist(corr, U, var, meanx, meany, inter):
+    
+    tol = 1e-10  # numerical stability
+    x = U[:, None]  # shape (n, 1)
+    y = U[None, :]  # shape (1, n)
+    dx = x - meanx
+    dy = y - meany
+
+    exponent = (dx**2 + dy**2 - 2 * corr * dx * dy)
+    denom_exp = 2 * var * (1 - corr**2 + tol)
+
+    log_num = - exponent / denom_exp
+
+    # log denominator of PDF
+    log_denom = np.log(2 * np.pi * var) + 0.5 * np.log(1 - corr**2 + tol)
+
+    # log of joint PDF
+    log_pdf = log_num - log_denom
+
+    # include the integration area element (log-space)
+    log_pdf += 2 * np.log(inter)
+
+    return log_pdf
