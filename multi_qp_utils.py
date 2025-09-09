@@ -45,7 +45,10 @@ def sample_pre_process(Xarr,Y_full,bins,mean_dp,var_dp,num_chunks,seed,pheno):
 
     K = computeGRM(Xarr)
     
+    print("Min:", np.min(K))
+    print("Max:", np.max(K))
     print(f'GRM size : {K.shape}', flush=True)
+    
     diag = np.diag(K)
 
     # # Zero out near-zero values
@@ -250,7 +253,7 @@ def compute_partial_C_for_row(args):
         K_row[i] = 0.0 
 
     for j in range(len(K_row)): 
-        if K_row[j] == 0.0:
+        if K_row[j] <= 0.0:
             continue
         # H = method2(corr_ij[j],var,mean_i,mean_j[j],U,inter)
         # # H = joint_prob_dist(corr_ij[j],U,var,mean_i,mean_j[j],inter)
