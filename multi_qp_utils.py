@@ -245,29 +245,31 @@ def compute_partial_C_for_row(args):
     # i,K,corr_ij,U,mean_x,mean_y,var,inter = args
 
     sz_y,sz_yhat = U.shape
-    # C = np.zeros((sz_y,sz_yhat),dtype=np.float32)
-    logC = np.full((sz_y, sz_yhat), -np.inf, dtype=np.float64)
+    C = np.zeros((sz_y,sz_yhat),dtype=np.float32)
+    # logC = np.full((sz_y, sz_yhat), -np.inf, dtype=np.float64)
 
     if zero_diag and i < len(K_row):
         K_row = K_row.copy()  
         K_row[i] = 0.0 
 
     for j in range(len(K_row)): 
-        if K_row[j] <= 0.0:
+        if K_row[j] == 0.0:
             continue
         # H = method2(corr_ij[j],var,mean_i,mean_j[j],U,inter)
         # # H = joint_prob_dist(corr_ij[j],U,var,mean_i,mean_j[j],inter)
-        # C += (K_row[j] * H)
-        
         log_H = joint_log_prob_dist(corr_ij[j], U, var, mean_i, mean_j[j], inter)
-        log_K = np.log(K_row[j])
-        log_weighted = log_K + log_H
+        # Convert back to normal space
+        H = np.exp(log_H).astype(np.float32)
+        C += (K_row[j] * H)
+        
+#         log_K = np.log(K_row[j])
+#         log_weighted = log_K + log_H
 
-        # log-sum-exp accumulate into logC
-        logC = np.logaddexp(logC, log_weighted)
+#         # log-sum-exp accumulate into logC
+#         logC = np.logaddexp(logC, log_weighted)
     
-    # Convert back to normal space at the end
-    C = np.exp(logC).astype(np.float32)
+#     # Convert back to normal space at the end
+#     C = np.exp(logC).astype(np.float32)
 
     return C
 
@@ -510,10 +512,8 @@ Returns log(PDF) + log(inter^2), for later log-space accumulation.
 def joint_log_prob_dist(corr, U, var, meanx, meany, inter):
     
     tol = 1e-10  # numerical stability
-    x = U[:, None]  # shape (n, 1)
-    y = U[None, :]  # shape (1, n)
-    dx = x - meanx
-    dy = y - meany
+    dx = U - meanx
+    dy = U.T - meany
 
     exponent = (dx**2 + dy**2 - 2 * corr * dx * dy)
     denom_exp = 2 * var * (1 - corr**2 + tol)
