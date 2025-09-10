@@ -173,7 +173,7 @@ def computeGRM(Xstd):
 
     for i in range(0, d, chunk_size):
         end = min(i + chunk_size, d)
-        X_chunk = Xstd[:, i:end].astype(np.float32)  # Ensure float32 to save memory
+        X_chunk = Xstd[:, i:end]
         K += X_chunk @ X_chunk.T  # Efficient NumPy matrix multiplication
 
     # Optional normalization

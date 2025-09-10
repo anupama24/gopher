@@ -142,7 +142,7 @@ def main():
     for col_start in range(0, n_cols, chunk_size):
             
             col_end = min(col_start + chunk_size, n_cols)
-            chunk = X_snp[:, col_start:col_end]
+            chunk = X_snp[:, col_start:col_end].copy()
             mean = np.mean(chunk, axis=0)
             std = np.std(chunk, axis=0)
             # mean = np.mean(X_snp[:, col_start:col_end], axis=0)
