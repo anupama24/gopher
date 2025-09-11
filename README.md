@@ -33,7 +33,7 @@ pip install numpy scipy scikit-learn h5py cvxopt
 
 
 #Installing pgenlib
-pgenlib is a C++ library with Python bindings for efficient processing of PLINK2 genotype files.
+#pgenlib is a C++ library with Python bindings for efficient processing of PLINK2 genotype files.
 pip install pgenlib
 
 #Installing PLINK2
@@ -43,19 +43,31 @@ unzip -q plink2_linux_x86_64_latest.zip > /dev/null 2>&1
 chmod +x plink2
 ```
 
-Clone the repository
+## Clone the repository
 ```bash
 git clone https://github.com/username/gopher
 cd gopher
 ```
 ## Resource Requirements
-
 All experiments require access to a high-performance multi-processor system with at least 48 CPU cores and 256 GB of RAM. For GOPHER-MultiQP, a cloud instance equivalent to an Amazon EC2 g4dn.16xlarge (64 vCPUs and 256 GB RAM) is recommended to ensure optimal performance.
 
 
 Usage
 Input Data
-Prepare GWAS association statistics or phenotype data in the format specified by the scripts in data/. Example datasets and formatting instructions are provided.
+
+## Example Data
+We provide an example synthetic dataset in the `example_data/` directory. 
+
+### Main Input Data Files
+
+- `geno/chr[1-22].{pgen, psam, pvar}`: PGEN-format genotype data files for chromosomes 1 through 22.
+- `pheno.txt`: Phenotype file; each line contains the phenotype value for each sample listed in the corresponding `.psam` file.
+- `sample_keep.txt`: A list of sample IDs (from the `.psam` file) to include in the analysis. This is used with the `--keep` flag in PLINK2. (See [PLINK2 file specification](https://www.cog-genomics.org/plink/2.0/input#keep) for more details.)
+
+### Data Preprocessing
+
+
+
 Running GOPHER
 To run the phenotype randomization mechanisms with differential privacy guarantees:
 
