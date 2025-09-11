@@ -66,9 +66,44 @@ We provide an example synthetic dataset in the `example_data/` directory.
 - `pheno.txt`: Phenotype file; each line contains the phenotype value for each sample listed in the corresponding `.psam` file.
 - `sample_keep.txt`: A list of sample IDs (from the `.psam` file) to include in the analysis. This is used with the `--keep` flag in PLINK2. (See [PLINK2 file specification](https://www.cog-genomics.org/plink/2.0/input#keep) for more details.)
 
+## Pipeline Overview
+
+The GOPHER pipeline automates the full process from raw genotype data to private GWAS results. It includes quality control, phenotype simulation, privacy mechanism application, and downstream GWAS analysis. The steps are as follows:
+
+1. **Genotype Quality Control (QC)**  
+   Genotype data is filtered using the `doQC.sh` script. This typically includes filtering on minor allele frequency (MAF), genotype missingness, sample missingness, and Hardy-Weinberg equilibrium (HWE), following standard GWAS practices.
+
+2. **Phenotype Simulation**  
+   Phenotypes are simulated from the genotype data based on a specified heritability parameter (`h2`). This step allows for controlled experimentation using synthetic data with known genetic architecture.
+
+3. **Baseline GWAS (Non-Private)**  
+   A standard GWAS is run on the original (non-private) phenotype using PLINK2. This serves as a baseline for evaluating the impact of privacy-preserving mechanisms.
+
+4. **Polygenic Risk Score (PRS) and Prior Estimation**  
+   PRS are computed using summary statistics from the (non-private or previous) GWAS. These scores are then used to estimate marginal priors for phenotypes, which improve inference under certain privacy mechanisms.
+
+5. **Privacy Mechanism Application**  
+   One of the supported privacy mechanisms is applied to the phenotype to ensure differential privacy:
+   - **LP** (Local Perturbation)
+   - **RR** (Randomized Response)
+   - **Lap** (Laplace Mechanism)
+   - **QP** (Quadratic Programming)
+   - **MultiLP** (Multi-party Linear Programming)
+   - **MultiQP** (Multi-party Quadratic Programming)
+
+   These mechanisms generate privatized versions of the phenotype that can be shared or analyzed while preserving individual privacy.
+
+6. **Result Combination for Multi-Sample Methods**  
+   For methods involving multiple parties or samples (e.g., MultiLP, MultiQP), results from each party are aggregated. This may involve secure aggregation protocols or trusted intermediaries, depending on the setup.
+
+7. **Private GWAS Execution**  
+   For each specified privacy budget (`ε`), a private GWAS is run using PLINK2 on the privatized phenotypes. This produces differential privacy-compliant association statistics for downstream interpretation.
+
+---
+
+Each step is configurable, allowing researchers to adapt the pipeline for their own datasets and privacy constraints.
+
 ### Data Preprocessing
-
-
 
 ### Running GOPHER
 To run the phenotype randomization mechanisms with differential privacy guarantees:
