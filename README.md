@@ -43,19 +43,21 @@ unzip -q plink2_linux_x86_64_latest.zip > /dev/null 2>&1
 chmod +x plink2
 ```
 
-## Clone the repository
+### Clone the repository
 ```bash
 git clone https://github.com/username/gopher
 cd gopher
 ```
-## Resource Requirements
+
+### Resource Requirements
 All experiments require access to a high-performance multi-processor system with at least 48 CPU cores and 256 GB of RAM. For GOPHER-MultiQP, a cloud instance equivalent to an Amazon EC2 g4dn.16xlarge (64 vCPUs and 256 GB RAM) is recommended to ensure optimal performance.
 
 
-Usage
-Input Data
+## Usage
 
-## Example Data
+###Input Data
+
+### Example Data
 We provide an example synthetic dataset in the `example_data/` directory. 
 
 ### Main Input Data Files
@@ -68,10 +70,10 @@ We provide an example synthetic dataset in the `example_data/` directory.
 
 
 
-Running GOPHER
+### Running GOPHER
 To run the phenotype randomization mechanisms with differential privacy guarantees:
 
 
-Output
+### Output
 Differentially private phenotype values are saved in the specified output directory, ready for downstream analysis with formal privacy guarantees.
 
