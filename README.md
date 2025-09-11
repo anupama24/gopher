@@ -29,22 +29,29 @@ GOPHER requires the following software and libraries:
 You can install most Python dependencies via pip:
 
 ```bash
-pip install numpy scipy scikit-learn cvxopt
+pip install numpy scipy scikit-learn h5py cvxopt
 
 
-Installing pgenlib
+#Installing pgenlib
 pgenlib is a C++ library with Python bindings for efficient processing of PLINK2 genotype files.
-Installing PLINK2
-Download PLINK2 binaries or source from the official site. Ensure the plink2 executable is in your system PATH.
+pip install pgenlib
+
+#Installing PLINK2
+#Download PLINK2 binaries or source from the official site. Ensure the plink2 executable is in your system PATH.
 wget -q https://s3.amazonaws.com/plink2-assets/plink2_linux_x86_64_latest.zip > /dev/null 2>&1
 unzip -q plink2_linux_x86_64_latest.zip > /dev/null 2>&1
 chmod +x plink2
 ```
 
 Clone the repository
-```bashgit clone https://github.com/username/gopher
+```bash
+git clone https://github.com/username/gopher
 cd gopher
 ```
+## Resource Requirements
+
+All experiments require access to a high-performance multi-processor system with at least 48 CPU cores and 256 GB of RAM. For GOPHER-MultiQP, a cloud instance equivalent to an Amazon EC2 g4dn.16xlarge (64 vCPUs and 256 GB RAM) is recommended to ensure optimal performance.
+
 
 Usage
 Input Data
@@ -54,5 +61,5 @@ To run the phenotype randomization mechanisms with differential privacy guarante
 
 
 Output
-Privatized GWAS statistics are saved in the specified output directory, ready for downstream analysis with formal privacy guarantees.
+Differentially private phenotype values are saved in the specified output directory, ready for downstream analysis with formal privacy guarantees.
 
