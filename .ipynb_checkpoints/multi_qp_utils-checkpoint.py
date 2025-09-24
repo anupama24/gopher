@@ -209,7 +209,7 @@ def cov_obj_mat(Xstd,prob_xy,d_yy):
 def compute_A_for_chunk(K,d_yy,Y_uniq,var,mean_i,mean_j,d,zero_diag):
     
     sz_y,sz_yhat = d_yy.shape
-    ni,nj = Ycorr.shape
+    ni,nj = K.shape
     inter = (Y_uniq.max()-Y_uniq.min())/(len(Y_uniq)-1)
     
     Ycorr = K.copy()
