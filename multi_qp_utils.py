@@ -263,17 +263,17 @@ def compute_partial_C_for_row(args):
         # # H = joint_prob_dist(corr_ij[j],U,var,mean_i,mean_j[j],inter)
         log_H = joint_log_prob_dist(corr_ij[j], U, var, mean_i, mean_j[j], inter)
         
-        # H = np.exp(log_H)#.astype(np.float32)
-        log_K = np.log(K_row[j])
-        log_weighted = log_K + log_H
+        H = np.exp(log_H).astype(np.float32)
+#         log_K = np.log(K_row[j])
+#         log_weighted = log_K + log_H
         
-        # Convert back to normal space
-        C += np.exp(log_weighted).astype(np.float32)
+#         # Convert back to normal space
+#         C += np.exp(log_weighted).astype(np.float32)
         
         # # log-sum-exp accumulate into logC
         # logC = np.logaddexp(logC, log_weighted)
     
-        # C += (K_row[j] * H)
+        C += (K_row[j] * H)
         
 
 #     # Convert back to normal space at the end
