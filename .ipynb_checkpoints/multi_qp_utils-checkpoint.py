@@ -349,6 +349,12 @@ def opt_dca(A,B,E,sz_y,sz_yhat,eps,max_iter,optTol,num_chunks):
         prevW = np.zeros((nvars*num_chunks,1),dtype=np.float32)
 
     Popt = matrix(A)
+    
+    os.environ["OPENBLAS_NUM_THREADS"] = "16"
+    os.environ["OMP_NUM_THREADS"] = "16"
+
+    print("Set OpenBLAS to:", os.environ.get("OPENBLAS_NUM_THREADS"))
+    
     for itr in range(max_iter):
         H =  (E @ prevW )
         newB = B[:,None] - H
