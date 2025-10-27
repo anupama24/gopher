@@ -1,0 +1,17 @@
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Ignore temporary or backup notebook files
+*~ 
+*.bak
+
+# Optionally ignore all notebooks (if you don’t want to version-control them)
+# Uncomment the next line if desired:
+*.ipynb
+
+# Python cache and virtual environment (optional)
+__pycache__/
+*.py[cod]
+venv/
+.env
+
