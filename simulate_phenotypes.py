@@ -83,7 +83,6 @@ standardize_with_chunks(chunk_size=chunk_size)
 # Simulate phenotypes
 # -----------------------------------------------------------------------------
 rng = np.random.RandomState(seed)
-pheno_file = data_path / "simulated_phenotypes.txt"
 
 n, d = Xstd.shape
 print(f"Standardized genotype matrix: {n} samples x {d} variants")

@@ -1,7 +1,8 @@
 ##########################################################################
-## Implementation of the baseline methods to generate private phenotype ##
-## Test for different values of privacy budget                          ##
-########################################################################## 
+## Implementation of Laplace and Randomized Response (RR) mechanisms     ##
+## for generating private phenotypes under differential privacy.         ##
+## Supports testing across multiple epsilon values.                      ##
+##########################################################################
 
 
 import argparse
@@ -12,134 +13,145 @@ import math
 from utils import *
 from pgen_reader import *
 from functions import *
-#sys.path.append(".")
+from rr_lp_utils import *
 
-""" Configure command line arguments """
+# ----------------------------- #
+#   Command-line configuration  #
+# ----------------------------- #
 def parse_args():
-    parser = argparse.ArgumentParser()
-    # parser.add_argument('--src', default=None, help='path to merged genotypes and phenotype folder')
-    parser.add_argument('--dest', default=None, help='path to destination folder')
-    parser.add_argument('--pheno_file', default=None, help='path to phenotype file')
-    parser.add_argument('--pheno', default=None, type=str, help='Name of phenotype')
-    parser.add_argument('-el', '--eps_list', default=None,help='delimited eps list input', type=str)
-    # parser.add_argument('--h2', default=0.8, type=float, help='h2')
-    # parser.add_argument('--cov_file', default=None, help='path to covariate file')
-    # parser.add_argument('--cov_priv', default=1.0, type=float, help='total privacy budget for covariates')
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description="Generate private phenotypes using Laplace or Randomized Response mechanisms.")
+    parser.add_argument("--dest", default=None, help="Path to destination folder for outputs")
+    parser.add_argument("--pheno_file", required=True, help="Phenotype file")
+    parser.add_argument("--pheno", required=True, help="Name of phenotype column")
+    parser.add_argument("--mech", choices=["laplace", "rr", "both"], default="both", help="Mechanism to apply")
+    parser.add_argument("-el", "--eps_list", default="1.0,2.0,3.0,4.0,5.0", help="Comma-separated list of epsilon values")
+    parser.add_argument("--seed", type=int, default=1234, help="Seed for random number generator")
+    parser.add_argument("--bins", type=int, default=100, help="Discrete bins for continuous inputs (for RR)")
+    parser.add_argument("--h2", type=float, default=None, help="Heritability (optional)")
+    
     return parser.parse_args()
 
 
+def find_indices(arr, bin_centers):
+    
+    diff_matrix = np.abs(arr[:, None] - bin_centers[None, :])
+    indices = np.argmin(diff_matrix, axis=1)
+    return indices
+
+# ----------------------------- #
+#      Randomized Response      #
+# ----------------------------- #
+def apply_RR(Y_arr, eps, bins, seed):
+    
+    """Apply Randomized Response (RR) mechanism to phenotype array."""
+    Y = Y_arr[~np.isnan(Y_arr)]
+    print(f"RR: phenotype range: min={Y.min()}, max={Y.max()}", flush=True)
+
+    low, high = Y_arr.min(), Y_arr.max()
+    bin_edges = np.linspace(low, high, bins + 1)
+    Y_bins = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    rng = np.random.RandomState(seed)
+
+    priv_y = np.full(Y_arr.shape, np.nan, dtype=np.float32)
+
+    for i, val in enumerate(Y_arr):
+        if np.isnan(val):
+            continue
+        idx = np.abs(Y_bins - val).argmin()
+        new_val = compute_RR_bins(Y_bins[idx], Y_bins, eps, rng)
+        priv_y[i] = new_val
+
+    return priv_y
+
+# ----------------------------- #
+#       Laplace Mechanism       #
+# ----------------------------- #
+def apply_laplace(Y_arr, eps, seed):
+    
+    """Apply Laplace mechanism to phenotype array."""
+    Y = Y_arr[~np.isnan(Y_arr)]
+    print(f"Laplace: phenotype range: min={Y.min()}, max={Y.max()}", flush=True)
+
+    sensitivity = Y.max() - Y.min()
+    rng = np.random.RandomState(seed)
+
+    noise = laplace_noise(sensitivity, eps, len(Y))
+    Y_private = Y + noise
+
+    priv_Y = np.full(Y_arr.shape, np.nan, dtype=np.float32)
+    j = 0
+    for i, val in enumerate(Y_arr):
+        if np.isnan(val) or np.isclose(val, -9) or j >= len(Y):
+            continue
+        priv_Y[i] = max(Y_private[j], Y.min())
+        j += 1
+
+    return priv_Y
+ 
+
+# ----------------------------- #
+#              Main             #
+# ----------------------------- #
 def main():
-    
     args = parse_args()
-    if args.dest is None:
-        dest = Path.cwd()
-    else:
-        dest=Path(args.dest)
-        
-    # src = Path(args.src)
-    
-    ##Path to output folder
-    out_path = dest
-    if not os.path.exists(out_path):
-        os.mkdir(out_path)
 
-    # if args.pheno_file is None:
-    #     phenoFile =  Path.cwd() / "test_data/ukb_simulate_pheno_lp.txt"
-    # else:
-    phenoFile= args.pheno_file
+    dest = Path(args.dest) if args.dest else Path.cwd()
+    dest.mkdir(parents=True, exist_ok=True)
 
-    if args.eps_list is not None:
-        eps_all = [float(item) for item in args.eps_list.split(',')]
-    else: 
-        eps_all = [1.0,2.0,3.0,4.0,5.0,6.0]
+    # Create mechanism-specific subfolders only if needed
+    lap_dir = dest #/ "Laplace"
+    rr_dir = dest #/ "RR"
+
+    # if args.mech in ["laplace", "both"]:
+    #     lap_dir.mkdir(parents=True, exist_ok=True)
+    # if args.mech in ["rr", "both"]:
+    #     rr_dir.mkdir(parents=True, exist_ok=True)
         
+    eps_all = [float(eps) for eps in args.eps_list.split(",")]
+    pheno_file = Path(args.pheno_file)
     pheno_name = args.pheno
-#     eps_cov = args.cov_priv
-#     h2 = args.h2
-#     phenoCovFile= args.cov_file
+    h2 = args.h2
     
+    print("\n===== Configuration =====")
     print(' '.join(f'{k}={v}' for k, v in vars(args).items()),flush=True)
-    print(f"Running baseline method-Laplace mechanism on phenotype: {pheno_name}",flush=True)
+    print("==========================\n")
 
-    
-    pheno_df = load_phenotype(phenoFile,sample_subset=None)
+    # Load phenotype
+    pheno_df = load_phenotype(pheno_file, sample_subset=None)
     Y_full = pheno_df[pheno_name].to_numpy(dtype=np.float32)
-    Y = Y_full[~np.isnan(Y_full)]
-    n=Y.shape[0]
+    n = len(Y_full)
 
-    Y_new = np.zeros(n,dtype=np.float32)
-    print(f"Sensitivity= {Y.max()}-{Y.min()}", flush=True)
-    
-    for eps_itr in eps_all:
-
-        sensitivity = Y.max() - Y.min()
-        Y_new = Y + laplace_noise(sensitivity, eps_itr,n)
-        
-        priv_Y = np.zeros(Y_full.shape[0],dtype=np.float32)
-        j= 0
-        for i in range(Y_full.shape[0]):
-            if (np.isclose(Y_full[i],-9) or np.isnan(Y_full[i]) or j>=n):
-                priv_Y[i] = np.nan
+    # ---- Laplace Mechanism ----
+    if args.mech in ["laplace", "both"]:
+        print(f"Running Laplace mechanism for phenotype '{pheno_name}'...")
+        for eps in eps_all:
+            priv_Y = apply_laplace(Y_full, eps, args.seed)
+            # Add h2 to filename only if provided
+            if h2 is not None:
+                out_file = lap_dir / f"Lap_sample_{n}_eps_{eps}_{pheno_name}_h2_{h2}.txt"
             else:
-                if j<n and Y_new[j] <0:
-                    Y_new[j] = Y.min()
-                priv_Y[i] = Y_new[j]
-                j+=1
+                out_file = lap_dir / f"Lap_sample_{n}_eps_{eps}_{pheno_name}.txt"
 
-        outFile = out_path/ f"Lap_sample_{n}_eps_{eps_itr}_{pheno_name}.txt"
-        save_pheno_gwas(priv_Y,phenoFile,pheno_name,outFile)
+            save_pheno_gwas(priv_Y, pheno_file, pheno_name, out_file)
+        print("Laplace mechanism completed.\n")
+
+    # ---- Randomized Response ----
+    if args.mech in ["rr", "both"]:
+        print(f"Running Randomized Response mechanism for phenotype '{pheno_name}'...")
+        for eps in eps_all:
+            priv_Y = apply_RR(Y_full, eps, args.bins, args.seed)
             
+            if h2 is not None:
+                out_file = rr_dir / f"RR_sample_{n}_eps_{eps}_{pheno_name}_h2_{h2}.txt"
+            else:
+                out_file = rr_dir / f"RR_sample_{n}_eps_{eps}_{pheno_name}.txt"
+                
+            save_pheno_gwas(priv_Y, pheno_file, pheno_name, out_file)
+        print("Randomized Response mechanism completed.\n")
 
-    print(f"Laplace mechanism for {pheno_name} done",flush=True)
-    
+    print("Done.")
 
-#     if phenoCovFile is not None:
-#         covOutFile = src / f"phenoLapCovR2PC_eps_{eps_itr}_{h2}.txt"
-#         if not os.path.isfile(covOutFile):
-#             privSaveCovData(phenoCovFile,eps_cov,covOutFile)
-    
-    
-    
-# def privSaveCovData(covFile,eps,covOutFile):
-
-#     W_df = pd.read_csv(covFile, sep='\t', index_col=0)
-#     age_full  = W_df['AGE'].to_numpy(dtype=np.int32)
-#     age = age_full[~np.isnan(age_full)]
-#     priv_age = np.zeros(age_full.shape[0],dtype=np.int32)
-    
-#     sex_full = W_df['SEX'].to_numpy(dtype=np.int8)
-#     sex = sex_full[~np.isnan(sex_full)]
-#     priv_sex = np.zeros(sex_full.shape[0],dtype=np.int8)
-
-#     eps1 = (1/2) * eps
-#     eps2 = (1/2) * eps
-
-#     age_new = (np.rint(age + laplace_noise((age.max()-age.min()), eps1,age.shape[0]))).astype(int)
-#     sex_new = sex + laplace_noise((sex.max()-sex.min()), eps2,sex.shape[0])
-    
-#     j= 0
-#     for i in range(age_full.shape[0]):
-#         if (np.isclose(age_full[i],-9) or np.isnan(age_full[i]) or j>=age.shape[0]):
-#             priv_age[i] = np.nan
-#         else:
-#             if j<age.shape[0] and age_new[j] <0:
-#                 age_new[j] = age.min()
-#             priv_age[i] = age_new[j]
-#             j+=1
-#     j=0
-#     for i in range(sex_full.shape[0]):
-#         if (np.isclose(sex_full[i],-9) or np.isnan(sex_full[i]) or j>=sex.shape[0]):
-#             priv_sex[i] = np.nan
-#         else:
-#             if sex_new[j] <0.5:
-#                 priv_sex[i] = 1
-#             else:
-#                 priv_sex[i] = 2
-#             j+=1
-
-#     savePrivCovData(covFile,priv_age,priv_sex,covOutFile)
-
-	 
 
 if __name__ == '__main__':
     main()
