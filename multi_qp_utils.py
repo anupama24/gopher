@@ -278,7 +278,7 @@ def opt_dca(A,B,E,sz_y,sz_yhat,eps,max_iter,optTol,num_chunks):
         print(f"Iteration {itr+1}: err={err:.3e}, obj={fval:.4f}",flush=True)
 
         prev_fval = 0.5* (prevW.T @ (A-E)@ prevW) + B.T @ prevW
-        if (err <= optTol or np.abs(fval-prev_fval) <= optTol )::
+        if (err <= optTol or np.abs(fval-prev_fval) <= optTol ):
             break
 
         prevW = currW
