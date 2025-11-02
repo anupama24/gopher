@@ -190,16 +190,16 @@ def main():
         
         mean_dp = Xmean_df['mean_score'].to_numpy()
         var_dp = Xmean_df['dp_group_var'].to_numpy()
-        var1 = overall_var_dp
+        # var1 = overall_var_dp
 
     else:
         # Simulated data case
         mean_dp = Xmean_df['SCORE1_SUM'].values
         mean_dp = (mean_dp -np.mean(mean_dp))/np.std(mean_dp)
-        var1 = est_var_y(Y_full, n, args.eps).astype('float32')[0]
-        var_dp = np.full(len(mean_dp), var1, dtype=np.float32)
+        overall_var_dp = est_var_y(Y_full, n, args.eps).astype('float32')[0]
+        var_dp = np.full(len(mean_dp), overall_var_dp, dtype=np.float32)
 
-    print(f"DP Mean/Var prepared. DP-var: {var1}. Example means: {mean_dp[:5]}, Var example: {var_dp[:5]}", flush=True)
+    print(f"DP Mean/Var prepared. DP-var: {overall_var_dp}. Example means: {mean_dp[:5]}, Var example: {var_dp[:5]}", flush=True)
 
     # Preprocessing for QP
     Q1, Q2, B, Y_uniq, Y_hat, chunks = sample_pre_process(X_snp, Y, bins, mean_dp, var_dp,overall_var_dp, args.quantiles, seed, pheno_name)
