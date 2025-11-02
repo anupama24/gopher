@@ -1,303 +1,264 @@
-###################################################################
-## Implementation of the QP method to generate private phenotype ##
-## This file tests for different values of privacy budget        ##
-###################################################################
+########################################################################
+#          Implementation of the GOPHER-MultiQP mechanism for          #
+#    generating private phenotypes with varying privacy budgets (ε).   #
+#                                                                      #
+# It supports both real and simulated phenotypes, optionally excluding #
+# previously privatized samples(`--lp_file`) and reusing PRS scores    #
+# for phenotypic mean and variance.                                    #
+########################################################################
 
 
+"""Example:
+--------
+python multiQPMech.py \
+  --geno_file ukb22828_c1_b0_v3 \
+  --pheno_file data/phenotypes.txt \
+  --score_file data/scores.sscore \
+  --pheno Sim_Y_100 \
+  --eps_list 0.5,1.0,2.0 \
+  --sam 10000 \
+  --h2 0.8 \
+  --tag real \
+  --seed 37
+"""
 import argparse
-import os, fnmatch
-import sys
+import os
 import math
-import subprocess
-
-
-# from utils import *
+from pathlib import Path
+from scipy import stats
+from scipy.sparse.linalg import eigsh
+import gc
 from multi_qp_utils import *
 from pgen_reader import *
 from functions import *
-import gc
-from scipy.sparse.linalg import eigsh
-# from lmm import *
-#sys.path.append(".")
+from utils import *
 
-""" Configure command line arguments """
+# ---------------------------------------------------------------------
+# Argument Parsing
+# ---------------------------------------------------------------------
 def parse_args():
+    parser = argparse.ArgumentParser(description="Run GOPHER-MultiQP mechanism on phenotype data")
     
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--geno_file', default=None, help='genotype file tag')
-    parser.add_argument('--pheno_file', default=None, help='path to phenotype file')
-    parser.add_argument('--pheno', default="Sim_Y_100", type=str, help='Name of phenotype')
-    parser.add_argument('-el', '--eps_list', default=None,help='delimited eps list input', type=str)
-    parser.add_argument('--seed', default=37, type=int, help='Seed for random generator')
-    parser.add_argument('--bins', default=100, type=int, help='Dicrete bins for continuous input')
-    parser.add_argument('--eps', default=0.1, type=float, help='Privacy budget for prior')
-    parser.add_argument('--score_file', default=None, help='path to GWAS score file')
-    parser.add_argument('--lp_file', default=None, help='path to LP pheno file')
-    parser.add_argument('--sam', default=10000, type=int, help='Sample size')
-    # parser.add_argument('--h2', default=0.8, type=float, help='h2')
-    parser.add_argument('--optTot', default=10e-6, type=int, help='Error tolerance for DCA')
-    parser.add_argument('--itr', default=50, type=int, help='Number of iterations for DCA')
+    parser.add_argument('--geno_file', required=True, help='Base tag for genotype files (without .pgen/.pvar/.psam)')
+    
+    parser.add_argument('--pheno_file', required=True, help='Path to phenotype file')
+    parser.add_argument('--pheno', default="Sim_Y_100", help='Name of phenotype column')
+    parser.add_argument('-el', '--eps_list', type=str, help='Comma-separated list of ε values (e.g. 1.0,2.0,3.0)')
+    parser.add_argument('--seed', type=int, default=1234, help='Random seed')
+    parser.add_argument('--bins', type=int, default=100, help='Number of bins for continuous phenotype')
+    parser.add_argument('--eps', type=float, default=0.1, help='Privacy budget for prior')
+    parser.add_argument('--score_file', required=True, help='Path to PRS score file')
+    parser.add_argument('--lp_file', default=None, help='Optional path to existing privatized phenotype file used in PRS (for exclusion)')
+    parser.add_argument('--sam', type=int, default=10000, help='Sample size')
+    parser.add_argument('--tag', type=str, default=None, help='Phenotype type: real or sim')
+    parser.add_argument('--h2', type=float, default=0.8, help='Heritability (used in naming)')
+    parser.add_argument('--quantiles', '-q',type=int,default=7, help='Number of quantile bins to split PRS (default: 7)')
+    parser.add_argument('--optTot', default=1e-6, type=float, help='Error tolerance for DCA')
+    parser.add_argument('--itr', default=10, type=int, help='Number of iterations for DCA')
     
     return parser.parse_args()
-    
-"""Subsample data and store variant ids in file"""
-def subsample(file_prefix,variantNum,pvarOutFile,seed):
 
-    rng = np.random.RandomState(seed)
-    
-    if variantNum is not None:
-        pvar_file = f"{file_prefix}.pvar"
-        pvar_df = load_pvar(pvar_file)
-        variant_ids = pvar_df['id'].tolist()
-        M = len(variant_ids)
-        if M < variantNum:
-            v_idxs=list(range(0, M))
-        else:
-            v_ids = rng.randint(M-1,size=variantNum)
-        
-        new_pvar_df = pd.DataFrame(data=np.array(variant_ids,dtype=object)[v_ids], columns=['id'])
-        new_pvar_df.to_csv(pvarOutFile, sep="\t", index=False,header=False)
-
-"""Estimate the variance of y"""
-def est_var_y(y,n,eps):
-    
-    # n=y.shape[0]
+# Helper Function
+def est_var_y(y, n, eps):
+    """Estimate variance of phenotype y under ε-DP Laplace noise."""
     var = np.var(y)
-    return var+ laplace_noise((y.max()-y.min())**2/n, eps, 1)   
- 
+    sensitivity = (y.max() - y.min()) ** 2 / n
+    return var + laplace_noise(sensitivity, eps, 1)
 
 def main():
-
     args = parse_args()
 
-    print("here",flush=True)
-    phenoFile= args.pheno_file
-    scoreFile = args.score_file
-    samLPFile= args.lp_file
+    # Parse ε list
+    eps_all = [float(e) for e in args.eps_list.split(',')] if args.eps_list else [1.0, 2.0, 3.0, 4.0, 5.0]
 
-    if args.eps_list is not None:
-        eps_all = [float(item) for item in args.eps_list.split(',')]
-    else: 
-        eps_all = [1.0,2.0,3.0,4.0,5.0,6.0]
-        
+    print("\n===== Configuration =====")
+    for k, v in vars(args).items():
+        print(f"{k}: {v}")
+    print("==========================\n")
+
+    # --- Paths and Inputs ---
+    pheno_file = Path(args.pheno_file)
+    score_file = Path(args.score_file)
+    lp_file = Path(args.lp_file) if args.lp_file else None
     pheno_name = args.pheno
     seed = args.seed
     bins = args.bins
     eps1 = args.eps
     sam =  args.sam
-    
 
-    print(' '.join(f'{k}={v}' for k, v in vars(args).items()),flush=True)
-    
-    print(f"Running Multi QP mechanism on phenotype: {pheno_name}",flush=True)
-    
+    h2 = args.h2
+    tag = args.tag
 
     genoFile = args.geno_file
     pgen_file = f"{genoFile}.pgen"
     pvar_file = f"{genoFile}.pvar"
     psam_file = f"{genoFile}.psam"
 
-    pheno_df = load_phenotype(phenoFile,sample_subset=None)
+    print(f"Running Multi-QP mechanism for phenotype: {pheno_name}", flush=True)
+
+
+    # Load phenotype data
+    pheno_df = load_phenotype(pheno_file,sample_subset=None)
     pheno_df.index = pheno_df.index.astype(str)
     
-    arr = pheno_df[pheno_name].to_numpy(dtype=np.float32)
-    Y_max = np.nanmax(arr)
-    Y_min = np.nanmin(arr)
-    
-    if samLPFile is not None:
-        lp_df = load_phenotype(samLPFile,sample_subset=None)
+    Y_full =pheno_df[pheno_name].to_numpy(dtype=np.float32)
+    Y_max=np.nanmax(Y_full)
+    Y_min=np.nanmin(Y_full)
+
+    # If LP file provided, exclude existing privatized samples
+    if lp_file:
+        lp_df = load_phenotype(lp_file,sample_subset=None)
         lp_df.index = lp_df.index.astype(str)
-        id_set = set(lp_df['IID'])
-
-        is_in_set = pheno_df['IID'].isin(id_set)
+        exclude_ids = set(lp_df['IID'])
+        
+        is_in_set = pheno_df['IID'].isin(exclude_ids)
         row_numbers =  np.where(~is_in_set)[0]
-        print(len(row_numbers))
+        
+        pheno_df = pheno_df[~pheno_df['IID'].isin(exclude_ids)]
+        print(f"Excluded {len(exclude_ids)} samples from existing LP file", flush=True)
 
-        pheno_df = pheno_df[~pheno_df['IID'].isin(id_set)]
-    
-    Y_full = pheno_df[pheno_name].to_numpy(dtype=np.float32)
-    print(f"Size of phenotype vector: {Y_full.shape}",flush=True)
-    # n= Y_full.shape[0]
-    
-    id_set = set(pheno_df['IID'])
-    
+    # Load genotype data
     X_df = load_genotypes(pgen_file, pvar_file, psam_file, np.int8)
     X_df = X_df.loc[pheno_df.index]
-
-    print(X_df.shape)
-    # X_snp = X_snp.iloc[row_numbers].to_numpy(dtype=np.int8)
-    X_snp = X_df.to_numpy(dtype=np.int8)
+    X_snp = X_df.to_numpy(dtype=np.float32)
     del X_df
     gc.collect()
-    print(X_snp.shape)
 
-    # Xstd= np.zeros(X_snp.shape,dtype=np.float32)
-    X_snp = X_snp.astype(np.float32)  # convert once to save memory
-
-    chunk_size=1000
-    
+    # Standardize in chunks
+    chunk_size = 1000
     n_rows, n_cols = X_snp.shape
-    # standardized_array = np.zeros_like(X,dtype=np.float32)
-
     for col_start in range(0, n_cols, chunk_size):
-            
-            col_end = min(col_start + chunk_size, n_cols)
-            chunk = X_snp[:, col_start:col_end].copy()
-            mean = np.mean(chunk, axis=0)
-            std = np.std(chunk, axis=0)
-            # mean = np.mean(X_snp[:, col_start:col_end], axis=0)
-            # std = np.std(X_snp[:, col_start:col_end], axis=0)
-            std[std == 0] = 1.0
-            for row_start in range(0, n_rows, chunk_size):
-                row_end = min(row_start + chunk_size, n_rows)
-            
-                # X_chunk = X[row_start:row_end, col_start:col_end]
-    
-                # Standardize the chunk
-                X_snp[row_start:row_end, col_start:col_end] = ((chunk[row_start:row_end] - mean) / std)
+        col_end = min(col_start + chunk_size, n_cols)
+        chunk = X_snp[:, col_start:col_end]
+        mean = np.mean(chunk, axis=0)
+        std = np.std(chunk, axis=0)
+        std[std == 0] = 1.0
+        X_snp[:, col_start:col_end] = (chunk - mean) / std
 
-    # del X_snp
-
-    # del X
     gc.collect()
-    # print(Xstd.shape,Xstd.dtype,flush=True)
-    
-    print(f"Standardized array: {X_snp.shape},{X_snp.dtype}",flush=True)
-    Y = Y_full[~np.isnan(Y_full)]
+    print(f"Standardized genotype shape: {X_snp.shape}", flush=True)
+
+    # --- Extract phenotype vector ---
+    Y = pheno_df[pheno_name].to_numpy(dtype=np.float32)
     n_full = Y_full.shape[0]
-    n= Y.shape[0]
+    n = Y.shape[0]
+    print(f"Phenotype size: {n}", flush=True)
     
-    # scoreFile=dest/"results/NonPriv_PRS_100_20000_h=0.8.sscore"
     
-    score_df =  pd.read_csv(scoreFile, sep='\t',index_col='#FID')
-    # print(score_df.head())
-    score_df = score_df[score_df['IID'].isin(id_set)]
-    score_df = score_df.loc[pheno_df['IID']]  
     
-    pheno_df['group'] = pd.qcut(pheno_df[pheno_name].rank(method='first'), q=10, labels=False) + 1
+    # Load PRS scores and align indices
+    Xmean_df = pd.read_csv(score_file, sep='\t', index_col='#FID')
+    Xmean_df['group'] = pd.qcut(Xmean_df['SCORE1_SUM'], q=args.quantiles, labels=False) + 1
 
-    # Group Y into bins and compute mean and variance
-    y_grouped = pheno_df.groupby('group')[pheno_name]
-    y_group_mean = y_grouped.mean()
-    y_group_var = y_grouped.var()
-
-    group_counts = y_grouped.count()
-    group_max = Y_max
-    group_min = Y_min
-    sensitivity = (group_max - group_min) / group_counts
-
-    # Add Laplace noise
-    dp_group_mean = y_group_mean + laplace_noise(sensitivity, eps1*0.1, size=len(y_group_mean))
-    sensitivity = ((group_max - group_min)**2) / n
-    dp_group_var = y_group_var + np.abs(laplace_noise(sensitivity, eps1*0.9, size=len(y_group_var)))
-
-    # overall_var_dp = np.var(Y_full) + laplace_noise(sensitivity, eps1*0.9, 1)
-
-    # Global mean
-    overall_mean_dp = (group_counts * dp_group_mean).sum() / n
-    overall_var_dp = (group_counts * dp_group_var).sum() / n
-    between_group_var = ((group_counts * (dp_group_mean - overall_mean_dp)**2).sum()) / n
-    # Total variance
-    overall_var_dp = overall_var_dp + between_group_var
-    print(overall_var_dp)
+    # Align with phenotype individuals
+    Xmean_df = Xmean_df[Xmean_df['IID'].isin(pheno_df['IID'])]
+    Xmean_df = Xmean_df.loc[pheno_df['IID']]
     
-    # dp_group_var = dp_group_var.apply(lambda x: overall_var_dp if x <= 1e-12 else x)
-    
-    pheno_df['dp_group_mean'] = pheno_df['group'].map(dp_group_mean)
-    pheno_df['dp_group_var'] = pheno_df['group'].map(dp_group_var)
+    # Group-based DP mean and variance of phenotypes
+    if tag == "real":
+        # Compute group means/variances
+        Xmean_df['Y'] = Y
+        y_grouped = Xmean_df.groupby('group')['Y']
+        y_group_mean = y_grouped.mean()
+        y_group_var = y_grouped.var()
+        group_counts = y_grouped.count()
 
+        # Sensitivity calculations
+        sensitivity_mean = (Y_max - Y_min) / group_counts
+        sensitivity_var = ((Y_max - Y_min) ** 2) / group_counts
 
-    score_df = score_df.merge(
-        pheno_df[['IID', 'dp_group_mean','dp_group_var']],
-        on='IID',
-        how='left'
-    )
+        # Apply Laplace noise
+        dp_group_mean = y_group_mean + laplace_noise(sensitivity_mean, eps1 * 0.1, size=len(y_group_mean))
+        dp_group_var = y_group_var + np.abs(laplace_noise(sensitivity_var, eps1 * 0.9, size=len(y_group_var)))
 
-    score_df['mean_score'] = score_df['SCORE1_SUM'] * score_df['dp_group_var'] + score_df['dp_group_mean']
-    mean_dp = score_df['mean_score'].values
-    # overall_var_dp = np.var(Y_full) + laplace_noise(sensitivity, eps1*0.9, 1)
-    # y_var = overall_var_dp.astype('float32')[0]
-    # mean_dp = score_df['SCORE1_SUM'].values
-    print(mean_dp.shape)
+        # Global variance aggregation
+        overall_mean_dp = (group_counts * dp_group_mean).sum() / n
+        overall_var_dp = (group_counts * dp_group_var).sum() / n
+        between_group_var = ((group_counts * (dp_group_mean - overall_mean_dp) ** 2).sum()) / n
+        overall_var_dp += between_group_var
 
-    # y_var, sigma2_g, sigma2_e = estimate_variance(Y,varLMMfile,n_full, eps1*0.9,"ev")
-    # overall_mean_dp = np.mean(Y)
-    # y_var = est_var_y(Y,n_full, eps1)
-    # sigma2_g = h2 * y_var
-    # sigma2_e = y_var - sigma2_g
-    # y_var = y_var.astype('float32')[0]
-    # sigma2_g = sigma2_g.astype('float32')[0]
-    # sigma2_e = sigma2_e.astype('float32')[0]
-    # print(f"Phenotype max: {Y.max()}, min: {Y.min()}, mean: {np.mean(Y)}, variance: {y_var}, sigma2_g: {sigma2_g},sigma2_e: {sigma2_e}", flush=True)
+        # Assign privatized stats
+        Xmean_df['dp_group_mean'] = Xmean_df['group'].map(dp_group_mean)
+        Xmean_df['dp_group_var'] = Xmean_df['group'].map(dp_group_var)
 
-    y_var = overall_var_dp
-    print(f"Phenotype max: {Y.max()}, min: {Y.min()}, DP mean: {overall_mean_dp}, variance: {y_var}", flush=True)
-    n,d = X_snp.shape
-    
-    num_chunks = 7
-    # sample_pre_process(Xarr,Y_full,bins,mean_dp,var_dp,num_chunks,seed)
-    Q1,Q2,B,Y_uniq,Y_hat,chunks = sample_pre_process(X_snp,Y,bins,mean_dp,y_var,num_chunks,seed,pheno_name)
-    # Q1,Q2,B,Y_uniq,Y_hat,chunks = load_pre_process(Xstd,Y,bins,out_path,mean_dp,y_var,num_chunks,seed)
+        Xmean_df['mean_score'] = (
+            Xmean_df['SCORE1_SUM'] * np.sqrt(Xmean_df['dp_group_var']) + Xmean_df['dp_group_mean']
+        )
+        # mean_dp = Xmean_df['dp_group_mean'].to_numpy() 
+        # var1 = overall_var_dp
+        # var_dp = var1* np.ones(len(mean_dp),dtype=np.float32)
+        
+        mean_dp = Xmean_df['mean_score'].to_numpy()
+        var_dp = Xmean_df['dp_group_var'].to_numpy()
+        var1 = overall_var_dp
 
-    sz_y = Y_uniq.shape[0]
-    sz_yhat = Y_hat.shape[0]
-    optTot = args.optTot #10e-6
-    max_iter = args.itr #50
+    else:
+        # Simulated data case
+        mean_dp = Xmean_df['SCORE1_SUM'].values
+        mean_dp = (mean_dp -np.mean(mean_dp))/np.std(mean_dp)
+        var1 = est_var_y(Y_full, n, args.eps).astype('float32')[0]
+        var_dp = np.full(len(mean_dp), var1, dtype=np.float32)
 
+    print(f"DP Mean/Var prepared. DP-var: {var1}. Example means: {mean_dp[:5]}, Var example: {var_dp[:5]}", flush=True)
+
+    # Preprocessing for QP
+    Q1, Q2, B, Y_uniq, Y_hat, chunks = sample_pre_process(X_snp, Y, bins, mean_dp, var_dp,overall_var_dp, args.quantiles, seed, pheno_name)
+
+    optTot = args.optTot
+    max_iter = args.itr
+        
+    # Run Multi-LP across all epsilon values
     for eps_itr in eps_all:
-
-        eps_temp =eps_itr  - eps1
-        print(f"Running for eps={eps_itr}",flush=True)
-        sol = opt_dca(Q1,B,Q2, sz_y,sz_yhat, eps_temp ,max_iter,optTot,num_chunks)
-
-        priv_Y = save_QP_Yhat(sol,Y_full,Y_uniq,Y_hat,seed,chunks)
         
-        outFile = f"MultiQP_Priv_sample_{sam}_eps_{eps_itr}_{pheno_name}.txt"
+        eps_temp = eps_itr - eps1
+        print(f"\n Running Multi-QP for ε = {eps_itr}", flush=True)
         
-        if os.path.isfile(outFile):
-            pc_df= pd.read_csv(outFile, sep='\t', index_col=0)
+        sol = opt_dca(Q1, B, Q2, Y_uniq.shape[0], Y_hat.shape[0], eps_temp, max_iter, optTot, 7)
+        priv_Y = save_QP_Yhat(sol, Y_full, Y_uniq, Y_hat, seed, chunks)
+
+        if h2 is not None:
+            out_file =  f"MultiQP_sample_{args.sam}_eps_{eps_itr}_{pheno_name}_h2_{h2}.txt"
+        else:
+            out_file = f"MultiQP_sample_{args.sam}_eps_{eps_itr}_{pheno_name}.txt"
+        # out_file = f"MultiLP_Priv_{args.sam}_eps_{eps_itr}_{pheno_name}.txt"
+
+        # If file already exists, update; else create new
+        if os.path.isfile(out_file):
+            pc_df = pd.read_csv(out_file, sep='\t', index_col=0)
             pc_df.index = pc_df.index.astype(str)
-            is_in_set = pc_df['IID'].isin(id_set)
-            row_numbers =  np.where(~is_in_set)[0]
-            # pc_df = pc_df[pc_df.columns]
-            # pc_df['IID'] = pc_df.index.copy()   
-            print(pc_df.head(),flush=True)
+            pheno_df = pheno_df.copy()
+            pheno_df[pheno_name] = priv_Y
+
+            # Update pc_df for new privatized values
+            pc_df[pheno_name].update(pheno_df[pheno_name])
             
         else:
-            pheno_df = load_phenotype(phenoFile,sample_subset=None)
-            pheno_df.index = pheno_df.index.astype(str)
+            full_df = load_phenotype(pheno_file, sample_subset=None)
+            full_df.index = full_df.index.astype(str)
             
-            pc_df = pd.DataFrame(index=pheno_df.index.copy())
-            pc_df.insert(0,'FID','')
-            pc_df.insert(1,'IID','')
-            pc_df['FID'] = pheno_df.index.copy()
-            pc_df['IID'] = pheno_df.index.copy()   
+            pc_df = pd.DataFrame(index=full_df.index.copy())
+            pc_df.insert(0, 'FID', full_df.index.copy())
+            pc_df.insert(1, 'IID', full_df.index.copy())
             pc_df = pc_df.set_index("FID")
             pc_df[pheno_name] = np.nan
-        
-        # pheno_df.reset_index(drop=True, inplace=True)
-        
-        if samLPFile is not None:
-            pc_df[pheno_name].update(lp_df[pheno_name])
-            # pc_df[pheno_name] =  multi_Y_priv
-            pc_df.loc[pheno_df.iloc[row_numbers].index.astype(str), pheno_name] = priv_Y
-        else:
-            pc_df[pheno_name] = priv_Y
             
-        print(pc_df.columns,flush=True)
-        print(len(pc_df),flush=True)
+            pheno_df = pheno_df.copy()
+            pheno_df[pheno_name] = priv_Y
+
+            # Update pc_df for new privatized values
+            pc_df[pheno_name].update(pheno_df[pheno_name])
+
+            # Also update pc_df for LP privatized values (lp_df)
+            if lp_file is not None:
+                pc_df[pheno_name].update(lp_df[pheno_name])
+
+               
+        pc_df.to_csv(out_file, sep="\t", na_rep='NA', index=True)
         
-        pc_df.to_csv(outFile, sep="\t", na_rep='NA',index=True)
-        print(f"Multiple QP for {eps_itr} done",flush=True)
+    print(f"\n GOPHER-MultiQP mechanism completed for {pheno_name}.\n")
 
-
-    print(f"GOPHER-QP mechanism for {pheno_name} done",flush=True)
-
-
-	 
 
 if __name__ == '__main__':
     main()
 
 
-# sol = opt_dca((1.0/np.square(N)*y_var)*A, (1.0/np.square(N)*y_var)*B,(1.0/np.square(N)*y_var)*E,sz_y,sz_yhat, eps2,max_iter,optTot)

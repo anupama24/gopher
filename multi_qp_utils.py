@@ -1,328 +1,233 @@
+import os
 import sys
 import math
-import subprocess
-
-from utils import *
-import math
-import os
-import scipy.stats as st 
+import scipy.stats as st
 import multiprocessing as mp
-from cvxopt import solvers, matrix, spmatrix, mul,spdiag
-from collections import Counter
+from pathlib import Path
 from sklearn.cluster import KMeans
 from scipy.sparse.linalg import eigsh
 from scipy.special import logsumexp
-# import torch
+from cvxopt import solvers, matrix, spmatrix
 
-# from numba import njit,prange
+# --- Local imports ---
+from utils import *
+from rr_lp_utils import *
 
-def sample_pre_process(Xarr,Y_full,bins,mean_dp,var_dp,num_chunks,seed,pheno):
-	
-    n,d = Xarr.shape
-    var = var_dp*np.ones(n,dtype=np.float32)
+def sample_pre_process(Xarr, Y_full, bins, mean_dp, var_dp, overall_var,num_chunks, seed, pheno):
+    """
+    Prepare all pre-processing steps and matrices for the Multi-QP mechanism.
+        1. Compute privatized phenotype probability distribution (Y_uniq, prob_y)
+        2. Compute genetic relationship matrix (GRM)
+        3. Build quadratic programming objective matrices A and B
 
-    Y_uniq, prob_y = prob_dist_Y(Y_full,bins,mean_dp,var) #np.repeat(y_var,n))
+    """
+    print(f"Preprocessing for phenotype '{pheno}'", flush=True)
+    n, d = Xarr.shape
+    
+    # --- Step 1: Estimate phenotype distribution ---
+    Y_uniq, prob_y = prob_dist_Y(Y_full, bins, mean_dp, var_dp)
+    print(f"Original Y: bins={bins}, unique={Y_uniq.shape}", flush=True)
 
-    print(f"Original Y: # of bins={bins} and # of unique values={Y_uniq.shape}", flush=True)
-
-    Y_hat,diff_yy = get_diff_YY(Y_full,Y_uniq,bins,mean_dp,var)
-    print(f"Y_hat size: {Y_hat.shape}, dimension of Y-Y_hat diff matrix: {diff_yy.shape}", flush=True)
+    Y_hat, diff_yy = get_diff_YY(Y_full, Y_uniq, bins, mean_dp, var_dp)
+    print(f"Y_hat size={Y_hat.shape}, diff_yy={diff_yy.shape}", flush=True)
     
     sz_y,sz_yhat = diff_yy.shape
 
     rng = np.random.RandomState(seed)
 
-    kmeans = KMeans(n_clusters=num_chunks, random_state=seed)  
+    # --- Step 2: Cluster samples into phenotype groups ---
+    kmeans = KMeans(n_clusters=num_chunks, random_state=seed)
     kmeans.fit(mean_dp.reshape(-1, 1))
-    labels =  kmeans.labels_
-    
+    labels = kmeans.labels_
     clustered_indices = {i: np.where(labels == i)[0] for i in range(np.max(labels) + 1)}
-    # for cluster_id, indices in clustered_indices.items():
-    #     print(f"Cluster {cluster_id} has {len(indices)} elements.")
     chunks = [clustered_indices[i] for i in range(len(clustered_indices))]
+    print(f"Formed {len(chunks)} clusters", flush=True)
     
-    print(f'Number of clusters: {len(chunks)}', flush=True)
-
+    # --- Step 3: Compute Genetic Relationship Matrix (GRM) ---
     K = computeGRM(Xarr)
-    
-    print("Min:", np.min(K))
-    print("Max:", np.max(K))
-    print(f'GRM size : {K.shape}', flush=True)
-    
-    diag = np.diag(K)
-    print(diag)
-    # # Zero out near-zero values
-    # threshold = 1e-6
-    # K[np.abs(K) < threshold] = 0.0
+    print(f"GRM: min={np.min(K):.4f}, max={np.max(K):.4f}, shape={K.shape}", flush=True)
 
-    
-    B = []
-    A = []
+    # --- Step 4: Construct block matrices A and B ---
     block_matrix = [[None for _ in range(num_chunks)] for _ in range(num_chunks)]
-    # tol = 1e-8
+    B_blocks = []
 
     for i in range(num_chunks):
-        for j in range(i, num_chunks):             # Only compute upper triangle + diagonal
-            ixgrid = np.ix_(chunks[i],chunks[j])
-
-            # di = np.sqrt(diag[chunks[i]] + tol)[:, None]  # shape: (ni, 1)
-            # dj = np.sqrt(diag[chunks[j]] + tol)[None, :]  # shape: (1, nj)
-            # # Normalize Ki → Ycorr
-            # Ycorr = K[ixgrid] / (di * dj)
-            # Ycorr = np.clip(Ycorr, -1.0, 1.0)
-
-            zero_diag = (i == j)                  # diagonal chunk, pass zero_diag=True
-            Aij = compute_A_for_chunk(K[ixgrid], diff_yy, Y_uniq, var_dp,
-                                                  mean_dp[chunks[i]], mean_dp[chunks[j]], d, zero_diag)
-            # if i == j:
-            #     # diagonal chunk, pass zero_diag=True
-            #     A_temp.append(compute_A_for_chunk(K[ixgrid], Ycorr, diff_yy, Y_uniq, var_dp,
-            #                                       mean_dp[chunks[i]], mean_dp[chunks[j]], d, zero_diag=True))
-            # else:
-            #     # off-diagonal chunk, zero_diag=False
-            #     A_temp.append(compute_A_for_chunk(K[ixgrid], Ycorr, diff_yy, Y_uniq, var_dp,
-            #                                       mean_dp[chunks[i]], mean_dp[chunks[j]], d, zero_diag=False))
-
+        for j in range(i, num_chunks):
+            ixgrid = np.ix_(chunks[i], chunks[j])
+            Aij = compute_A_for_chunk(
+                K[ixgrid], diff_yy, Y_uniq, var_dp[chunks[i]], var_dp[chunks[j]],
+                mean_dp[chunks[i]], mean_dp[chunks[j]],d, zero_diag=(i == j))
             block_matrix[i][j] = Aij
-
             if i != j:
-                block_matrix[j][i] = Aij.T 
-       
-        # A.append(np.hstack(A_temp))
-        B.append(compute_B_for_chunk(Xarr[chunks[i],:],prob_y[chunks[i],:],diff_yy))
+                block_matrix[j][i] = Aij.T
 
-    # A = np.concatenate(A)
-    A_temp = [np.hstack(row) for row in block_matrix]
-    A = np.vstack(A_temp)
-    B = np.concatenate(B)
-
-    A = A/(n**2 *var[0])
-    B = B/(n**2 *var[0])
-    
-    print(f"B shape: {B.shape}, A shape: {A.shape}")
-    np.save(f"A_{A.shape}_{pheno}",A)
-    np.save(f"B_{B.shape}_{pheno}",B)
-
-    eigval, eigvec = eigsh((2.0)*A , k=1, which='SA')
-    rho= max(-1.0*min(eigval.real),0) + 10**-3                                #np.abs(min(eigval.real))*2
-
-    print(min(eigval.real),rho, flush=True)
-    Q2 = rho* np.eye(A.shape[0],dtype=np.float32)
-    Q1 = (2.0)*A + Q2
-
-    print(np.min(Q1),np.max(Q1),flush=True)
-    return Q1,Q2,B,Y_uniq,Y_hat,chunks
-    
-
-"""Estimate private probability distribution using Normal distribution. For continuous Y, a discrete subset is created of size bins"""
-def prob_dist_Y(Yarr,bins,mean,variance):
-
-    sd = np.sqrt(variance[0]) 
-    low,up = st.t.interval(0.99, df=len(Yarr)-1, loc=np.mean(mean),  scale=sd)
-    low = max(Yarr.min(),low)
-    up = min(Yarr.max(),up)
-    
-    # low = Yarr.min()
-    # up = Yarr.max()
-    print(low,up,flush=True)
-    bin_edges = np.linspace(low,up,num=bins+1)
-    Y_uniq = (bin_edges[:-1] + bin_edges[1:]) / 2
-
-    n = len(variance)
-    prob_y = np.zeros((n,len(Y_uniq)),dtype=np.float32)
-    inter = (Y_uniq.max()-Y_uniq.min())/(len(Y_uniq)-1)
-
-    for i in range(n):
-        mean_dp = mean[i] 
-        var_dp = variance[i]
-        prob = stats.norm(mean_dp,np.sqrt(var_dp))
-        prob_y[i,:] = prob.pdf(Y_uniq)*inter
-        prob_y[i,:] = prob_y[i,:]/np.sum(prob_y[i,:])
-    print(prob_y.shape)
-    return Y_uniq,prob_y
+        B_blocks.append(compute_B_for_chunk(Xarr[chunks[i], :],
+                                            prob_y[chunks[i], :], diff_yy))
 
 
-"""Creates set Y_hat which is an array of "bins" values evenly spaced between min and max of Yarr. Computes Y_uniq-Y_hat matrix"""
-def get_diff_YY(Yarr,Y_uniq,bins,mean,var=None):
 
-    # if var is not None:
-    #     sd = np.sqrt(var)
-    # else:
-    #     sd = (Yarr.min()-Yarr.max())/4.0
-    sd = np.sqrt(var[0]) 
-    low,up = st.t.interval(0.99, df=len(Yarr)-1, loc=np.mean(mean),  scale=sd)
-    low = max(Yarr.min(),low)
-    up = min(Yarr.max(),up)
-    # low = Yarr.min()
-    # up = Yarr.max()
-    print(low,up,flush=True)
-    
-    bin_edges = np.linspace(low,up,num=bins+1)
-    Y_hat = (bin_edges[:-1] + bin_edges[1:]) / 2
-    d_yy = np.zeros((len(Y_uniq),len(Y_hat)),dtype=np.float32)
-    
-    for i,y in enumerate(Y_uniq):
-        d_yy[i,:] =  y - Y_hat
-    
-    return Y_hat,d_yy
+    # Stack block matrices
+    A = np.vstack([np.hstack(row) for row in block_matrix])
+    B = np.concatenate(B_blocks)
+
+    A /= (n**2 * overall_var)
+    B /= (n**2 * overall_var)
+
+    print(f"A shape={A.shape}, B shape={B.shape}", flush=True)
+    np.save(f"A_{A.shape}_{pheno}", A)
+    np.save(f"B_{B.shape}_{pheno}", B)
+
+    # --- Step 5: Stabilize A matrix ---
+    eigval, _ = eigsh(2.0 * A, k=1, which='SA')
+    rho = max(-min(eigval.real), 0) + 1e-3
+    Q2 = rho * np.eye(A.shape[0], dtype=np.float32)
+    Q1 = 2.0 * A + Q2
+    print(f"Stabilization rho={rho:.5f}, Q1 range=({np.min(Q1):.5e}, {np.max(Q1):.5e})", flush=True)
+
+    return Q1, Q2, B, Y_uniq, Y_hat, chunks
 
 def computeGRM(Xstd):
+    """Compute the Genetic Relationship Matrix (GRM) from standardized genotypes."""
     n, d = Xstd.shape
-    chunk_size = 50000
     K = np.zeros((n, n))
+    chunk_size = 50000
+    print(f"Computing GRM using chunks of size {chunk_size}", flush=True)
 
     for i in range(0, d, chunk_size):
         end = min(i + chunk_size, d)
         X_chunk = Xstd[:, i:end]
-        K += X_chunk @ X_chunk.T  # Efficient NumPy matrix multiplication
-
+        K += X_chunk @ X_chunk.T
+        
     # Optional normalization
     K /= d
-
     return K
 
 
-"""Create QP objective matrices assuming independence of array elements"""
-def cov_obj_mat(Xstd,prob_xy,d_yy):
+def prob_dist_Y(Yarr, bins, mean, variance):
+    """Estimate private probability distribution for continuous phenotype Y."""
+    sd = np.sqrt(np.mean(variance))
+    low, up = st.t.interval(0.99, df=len(Yarr)-1, loc=np.mean(mean), scale=sd)
+    low, up = max(Yarr.min(), low), min(Yarr.max(), up)
+    print(f"Clipped range: [{low:.3f}, {up:.3f}]", flush=True)
     
-    sz_y,sz_yhat = d_yy.shape
-    n,d = Xstd.shape
-    print(f"Xstd shape: {Xstd.shape}")
+    bin_edges = np.linspace(low, up, num=bins+1)
+    Y_uniq = (bin_edges[:-1] + bin_edges[1:]) / 2
 
-    B = np.sum(np.square(Xstd),axis=1)
-    C = (Xstd.T @ prob_xy) #  m x n  @  n x |y|
-    C = C.T @ C            # |y| x m @  m x |y|
-    E = np.zeros((sz_y,sz_y))
-    for i in range(Xstd.shape[0]):
-        E+= B[i]* (prob_xy[i,:,None] @ prob_xy[i,None,:])
+    n = len(variance)
+    prob_y = np.zeros((n, len(Y_uniq)), dtype=np.float32)
+    inter = (Y_uniq.max() - Y_uniq.min()) / (len(Y_uniq) - 1)
 
-    C = C-E
-    C = np.repeat(np.repeat(C.T,repeats=sz_yhat, axis=1), repeats=sz_yhat, axis=0)
-    
-    d_vec = np.ravel(d_yy)
-    D = d_vec[:,np.newaxis] @ d_vec[:,np.newaxis].T
-    
-    A = C * D # element-wise
-    
-    return A
+    for i in range(n):
+        dist = st.norm(mean[i], np.sqrt(variance[i]))
+        prob_y[i, :] = dist.pdf(Y_uniq) * inter
+        prob_y[i, :] /= np.sum(prob_y[i, :])
+    return Y_uniq, prob_y
 
-def compute_A_for_chunk(K,d_yy,Y_uniq,var,mean_i,mean_j,d,zero_diag):
+
+def get_diff_YY(Yarr, Y_uniq, bins, mean, var):
+    """Construct matrix of differences between Y_uniq and discretized Y_hat."""
+    sd = np.sqrt(np.mean(var))
+    low, up = st.t.interval(0.99, df=len(Yarr)-1, loc=np.mean(mean), scale=sd)
+    low, up = max(Yarr.min(), low), min(Yarr.max(), up)
+
+    bin_edges = np.linspace(low, up, num=bins+1)
+    Y_hat = (bin_edges[:-1] + bin_edges[1:]) / 2
+    d_yy = np.array([[y - yhat for yhat in Y_hat] for y in Y_uniq], dtype=np.float32)
+    return Y_hat, d_yy
+
+
+def compute_A_for_chunk(K, d_yy, Y_uniq, var_i,var_j, mean_i, mean_j, d, zero_diag):
+    """
+    Compute a block of the A matrix corresponding to one (i,j) chunk pair.
+
+    """
+    sz_y, sz_yhat = d_yy.shape
+    ni, nj = K.shape
+    inter = (Y_uniq.max() - Y_uniq.min()) / (len(Y_uniq) - 1)
+    Ycorr = np.clip(K.copy(), -1.0, 1.0)
+    K *= d
+
+    U = np.repeat(Y_uniq, sz_y).reshape(sz_y, sz_y)
+    print(f"Computing A block {ni}×{nj}", flush=True)
     
-    sz_y,sz_yhat = d_yy.shape
-    ni,nj = K.shape
-    inter = (Y_uniq.max()-Y_uniq.min())/(len(Y_uniq)-1)
+    pool = mp.Pool(processes=mp.cpu_count()-4,maxtasksperchild=5)
     
-    Ycorr = K.copy()
-    Ycorr = np.clip(Ycorr, -1.0, 1.0)
+    args_list = [(i, K[i, :], Ycorr[i, :], U, mean_i[i], mean_j, var_i[i],var_j, inter, zero_diag)
+                     for i in range(ni)]
     
-    K = d*K
-    C = np.zeros((sz_y,sz_yhat),dtype=np.float32)
-    U = np.repeat(Y_uniq,sz_y).reshape(sz_y,sz_y)
-    print(f"Created K matrix: {K.shape}, Ycorr: {Ycorr.shape}",flush=True)
-    
-    print(mp.cpu_count(),flush=True)
-    pool = mp.Pool(processes=mp.cpu_count()-5,maxtasksperchild=5)
-    
-    args_list = [
-        (i, K[i, :], Ycorr[i, :], U, mean_i[i], mean_j, var, inter,zero_diag) 
-        for i in range(ni)
-    ]
-    # results = pool.map(compute_partial_C_for_row,[(i,K[i,:],Ycorr[i,:],U,mean_i[i],mean_j,var,inter) for i in range(ni)])
     results = pool.map(compute_partial_C_for_row, args_list)
     
     pool.close()
     pool.join()
     
     C = sum(results)
-    # C = C/(n**2 *var[0])
-    
-    C = np.repeat(np.repeat(C.T,repeats=sz_yhat, axis=1), repeats=sz_yhat, axis=0)
+        
+    C = np.repeat(np.repeat(C.T, sz_yhat, axis=1), sz_yhat, axis=0)
     d_vec = np.ravel(d_yy)
     D = d_vec[:,np.newaxis] @ d_vec[:,np.newaxis].T
-    A = C * D # element-wise
 
+    A = C * D
     return A
     
-    
+
 def compute_partial_C_for_row(args):
-    i, K_row, corr_ij, U, mean_i, mean_j, var, inter, zero_diag = args
-    # i,K,corr_ij,U,mean_x,mean_y,var,inter = args
+    """Helper for parallel A computation."""
+    i, K_row, corr_ij, U, mean_i, mean_j, var_i,var_j, inter, zero_diag = args
+    sz_y, sz_yhat = U.shape
+    C = np.zeros((sz_y, sz_yhat), dtype=np.float32)
 
-    sz_y,sz_yhat = U.shape
-    C = np.zeros((sz_y,sz_yhat),dtype=np.float32)
-    # logC = np.full((sz_y, sz_yhat), -np.inf, dtype=np.float64)
-
-    # if zero_diag and i < len(K_row):
-    #     K_row = K_row.copy()  
-    #     K_row[i] = 0.0 
-
-    for j in range(len(K_row)): 
-        if zero_diag and i==j:
+    for j in range(len(K_row)):
+        if zero_diag and i == j:
             continue
-        # H = method2(corr_ij[j],var,mean_i,mean_j[j],U,inter)
-        # # H = joint_prob_dist(corr_ij[j],U,var,mean_i,mean_j[j],inter)
-        log_H = joint_log_prob_dist(corr_ij[j], U, var, mean_i, mean_j[j], inter)
-        
+        log_H = joint_log_prob_dist(corr_ij[j], U, var_i,var_j[j], mean_i, mean_j[j], inter)
         H = np.exp(log_H).astype(np.float32)
-#         log_K = np.log(K_row[j])
-#         log_weighted = log_K + log_H
-        
-#         # Convert back to normal space
-#         C += np.exp(log_weighted).astype(np.float32)
-        
-        # # log-sum-exp accumulate into logC
-        # logC = np.logaddexp(logC, log_weighted)
-    
-        C += (K_row[j] * H)
-        
-
-#     # Convert back to normal space at the end
-#     C = np.exp(logC).astype(np.float32)
-
+        C += K_row[j] * H
     return C
 
 
-def method2(corr,var,meanx,meany,U,inter):
-    
-    loc1 = meanx + corr * (U-meany).T
-    scale1 = (1 - np.power(corr, 2)) * var
-    denom1 = np.sqrt(2 * np.pi * scale1)
-    num1 = np.exp(-((U - loc1) ** 2) / (2 * scale1))
-    H = (num1 / denom1) * inter
-    
-    denom2 = np.sqrt(2 * np.pi * var)
-    num2 = np.exp(-((U-meany).T ** 2) / (2 * var))
-    G = (num2 / denom2) * inter
-    
-    return H * G
-
-# def method2(corr,varx,vary,meanx,meany,U,inter):
-#     loc1 = meanx + np.sqrt(varx / vary) * corr * (U-meany).T
-#     scale1 = (1 - np.power(corr, 2)) * varx
-#     denom1 = np.sqrt(2 * np.pi * scale1)
-#     num1 = np.exp(-((U - loc1) ** 2) / (2 * scale1))
-#     H = (num1 / denom1) * inter
-    
-#     denom2 = np.sqrt(2 * np.pi * vary)
-#     num2 = np.exp(-((U-meany).T ** 2) / (2 * vary))
-#     G = (num2 / denom2) * inter
-    
-#     return H * G
-
-
-
-def compute_B_for_chunk(Xstd,prob_y,d_yy):
-
-    sz_y,sz_yhat = d_yy.shape
-    
-    B = np.sum(np.square(Xstd),axis=1)
+   
+def compute_B_for_chunk(Xstd, prob_y, d_yy):
+    """
+    Compute block B_i for cluster i.
+    """
+    sz_y, sz_yhat = d_yy.shape
+    B = np.sum(np.square(Xstd), axis=1)
     B = B.T @ prob_y            # 1 x n_r @  n_r x |y|
-    B = np.repeat(B,repeats=sz_yhat)
-    d_vec = np.ravel(d_yy)
-    D = d_vec * d_vec
-    B = B * D 
 
-    return B
+    B = np.repeat(B, repeats=sz_yhat)
+    D = np.square(np.ravel(d_yy))
+    return B * D
+
+"""Estimate joint probability distribution of bivariate normal distribution. """
+def joint_prob_dist(corr,U,var,meanx,meany,inter):
+    
+#     num = np.square(u)/var_x + np.square(v)/var_y - ((2*corr)*u*v/(np.sqrt(var_x*var_y)))
+    denom = 2*np.pi*var*np.sqrt(1-corr**2)
+    num = (U-meanx)**2 + (U.T-meany)**2 - (2*corr*U*U.T)
+    num = np.exp(-num/(2*var*(1-corr**2)))
+    pdf = num /denom
+    return pdf * inter**2 
+
+"""
+Computes log of joint PDF of a bivariate normal distribution.
+Returns log(PDF) + log(inter^2), for later log-space accumulation.
+"""
+def joint_log_prob_dist(corr, U, varx,vary, meanx, meany, inter):
+    tol = 1e-10  # numerical stability
+    dx = U - meanx
+    dy = U.T - meany
+
+    det = varx * vary * (1 - corr**2 + tol)
+    exponent = (
+        dx**2 / varx +
+        dy**2 / vary -
+        2 * corr * dx * dy / np.sqrt(varx * vary)
+    )
+    log_num = -0.5 * exponent
+    log_denom = np.log(2 * np.pi) + 0.5 * np.log(det)
+    log_pdf = log_num - log_denom + 2 * np.log(inter)
+
+    return log_pdf
 
 """Solve given QP optimization using DCA and cvxopt solver"""
 def opt_dca(A,B,E,sz_y,sz_yhat,eps,max_iter,optTol,num_chunks):
@@ -353,35 +258,30 @@ def opt_dca(A,B,E,sz_y,sz_yhat,eps,max_iter,optTol,num_chunks):
     os.environ["OPENBLAS_NUM_THREADS"] = "16"
     os.environ["OMP_NUM_THREADS"] = "16"
 
-    print("Set OpenBLAS to:", os.environ.get("OPENBLAS_NUM_THREADS"))
+    print("Set OpenBLAS to:", os.environ.get("OPENBLAS_NUM_THREADS"),flush=True)
     
     for itr in range(max_iter):
-        H =  (E @ prevW )
-        newB = B[:,None] - H
+        H = E @ prevW
+        newB = B[:, None] - H
         qopt = matrix(np.ravel(newB))
-        print("Popt max:", np.max(Popt), "min:", np.min(Popt),flush=True)
-        print("qopt max:", np.max(qopt), "min:", np.min(qopt))
-        # print("Gopt shape:", Gopt.size,flush=True)
-        
         solvers.options['show_progress'] = False
-        
-        sol = solvers.qp(Popt,qopt,Gopt,hopt,Aopt,bopt)
-        
-        if np.linalg.norm(prevW,2) >1 :
-            err =np.linalg.norm(sol['x']-prevW,2)**2/np.linalg.norm(prevW,2)**2
-        else: 
-            err =np.linalg.norm(sol['x']-prevW,2)**2 
-        # err =np.linalg.norm(sol['x']-prevW,2)/(1+np.linalg.norm(prevW,2))
+    
+        sol = solvers.qp(Popt, qopt, Gopt, hopt, Aopt, bopt)
+        # if sol['status'] != 'optimal':
+        #     print(f"Warning: Solver failed at iter {itr}")
+            # break
+
+        currW = np.array(sol['x'])
+        err = np.linalg.norm(currW - prevW, 2)**2 / (np.linalg.norm(prevW, 2)**2 + 1e-10)
+        fval = 0.5 * (currW.T @ (A - E) @ currW) + B.T @ currW
+
+        print(f"Iteration {itr+1}: err={err:.3e}, obj={fval:.4f}",flush=True)
+
         prev_fval = 0.5* (prevW.T @ (A-E)@ prevW) + B.T @ prevW
-        fval = 0.5* (sol['x'].T @ (A-E)@ sol['x']) + B.T @ sol['x']
-        
-        print(f"Iteration: {itr+1}, Iterate difference: {err}",flush=True)
-        print(f"Solution: Status - {sol['status']}, Primal obj value- {sol['primal objective']}",flush=True)
-        print(f"Function minimum: {fval}",flush=True)
-        
-        if (err<=optTol or np.abs(fval-prev_fval) <= optTol ):
+        if (err <= optTol or np.abs(fval-prev_fval) <= optTol )::
             break
-        prevW = np.array(sol['x'])
+
+        prevW = currW
     
     return sol
 
@@ -503,44 +403,62 @@ def load_pre_process(Y_full,bins,mean_dp,var_dp,num_chunks,seed,pheno):
  
 
 def find_indices(arr, bin_centers):
-    
+    """Find nearest bin indices for array elements."""
     diff_matrix = np.abs(arr[:, None] - bin_centers[None, :])
-    indices = np.argmin(diff_matrix, axis=1)
-    return indices
+    return np.argmin(diff_matrix, axis=1)
 
 
-"""Estimate joint probability distribution of bivariate normal distribution. """
-def joint_prob_dist(corr,U,var,meanx,meany,inter):
+"""Create QP objective matrices assuming independence of array elements"""
+def cov_obj_mat(Xstd,prob_xy,d_yy):
     
-#     num = np.square(u)/var_x + np.square(v)/var_y - ((2*corr)*u*v/(np.sqrt(var_x*var_y)))
-    denom = 2*np.pi*var*np.sqrt(1-corr**2)
-    num = (U-meanx)**2 + (U.T-meany)**2 - (2*corr*U*U.T)
-    num = np.exp(-num/(2*var*(1-corr**2)))
-    pdf = num /denom
-    return pdf * inter**2 
+    sz_y,sz_yhat = d_yy.shape
+    n,d = Xstd.shape
+    print(f"Xstd shape: {Xstd.shape}")
 
-"""
-Computes log of joint PDF of a bivariate normal distribution.
-Returns log(PDF) + log(inter^2), for later log-space accumulation.
-"""
-def joint_log_prob_dist(corr, U, var, meanx, meany, inter):
+    B = np.sum(np.square(Xstd),axis=1)
+    C = (Xstd.T @ prob_xy) #  m x n  @  n x |y|
+    C = C.T @ C            # |y| x m @  m x |y|
+    E = np.zeros((sz_y,sz_y))
+    for i in range(Xstd.shape[0]):
+        E+= B[i]* (prob_xy[i,:,None] @ prob_xy[i,None,:])
+
+    C = C-E
+    C = np.repeat(np.repeat(C.T,repeats=sz_yhat, axis=1), repeats=sz_yhat, axis=0)
     
-    tol = 1e-10  # numerical stability
-    dx = U - meanx
-    dy = U.T - meany
+    d_vec = np.ravel(d_yy)
+    D = d_vec[:,np.newaxis] @ d_vec[:,np.newaxis].T
+    
+    A = C * D # element-wise
+    
+    return A
 
-    exponent = (dx**2 + dy**2 - 2 * corr * dx * dy)
-    denom_exp = 2 * var * (1 - corr**2 + tol)
 
-    log_num = - exponent / denom_exp
 
-    # log denominator of PDF
-    log_denom = np.log(2 * np.pi * var) + 0.5 * np.log(1 - corr**2 + tol)
 
-    # log of joint PDF
-    log_pdf = log_num - log_denom
+def method2(corr,var,meanx,meany,U,inter):
+    
+    loc1 = meanx + corr * (U-meany).T
+    scale1 = (1 - np.power(corr, 2)) * var
+    denom1 = np.sqrt(2 * np.pi * scale1)
+    num1 = np.exp(-((U - loc1) ** 2) / (2 * scale1))
+    H = (num1 / denom1) * inter
+    
+    denom2 = np.sqrt(2 * np.pi * var)
+    num2 = np.exp(-((U-meany).T ** 2) / (2 * var))
+    G = (num2 / denom2) * inter
+    
+    return H * G
 
-    # include the integration area element (log-space)
-    log_pdf += 2 * np.log(inter)
+# def method2(corr,varx,vary,meanx,meany,U,inter):
+#     loc1 = meanx + np.sqrt(varx / vary) * corr * (U-meany).T
+#     scale1 = (1 - np.power(corr, 2)) * varx
+#     denom1 = np.sqrt(2 * np.pi * scale1)
+#     num1 = np.exp(-((U - loc1) ** 2) / (2 * scale1))
+#     H = (num1 / denom1) * inter
+    
+#     denom2 = np.sqrt(2 * np.pi * vary)
+#     num2 = np.exp(-((U-meany).T ** 2) / (2 * vary))
+#     G = (num2 / denom2) * inter
+    
+#     return H * G
 
-    return log_pdf
