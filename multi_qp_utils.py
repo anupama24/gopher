@@ -74,8 +74,8 @@ def sample_pre_process(Xarr, Y_full, bins, mean_dp, var_dp, overall_var,num_chun
     B /= (n**2 * overall_var)
 
     print(f"A shape={A.shape}, B shape={B.shape}", flush=True)
-    np.save(f"A_{A.shape}_{pheno}", A)
-    np.save(f"B_{B.shape}_{pheno}", B)
+    # np.save(f"A_{A.shape}_{pheno}", A)
+    # np.save(f"B_{B.shape}_{pheno}", B)
 
     # --- Step 5: Stabilize A matrix ---
     eigval, _ = eigsh(2.0 * A, k=1, which='SA')
