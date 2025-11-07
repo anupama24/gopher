@@ -144,7 +144,7 @@ def main():
     n = Y.shape[0]
     print(f"Phenotype size: {n}", flush=True)
     
-    
+    sensitivity_mean = (Y_max - Y_min) / n
     
     # Load PRS scores and align indices
     Xmean_df = pd.read_csv(score_file, sep='\t', index_col='#FID')
@@ -159,7 +159,7 @@ def main():
         # Compute group means/variances
         Xmean_df['Y'] = Y
         
-        sensitivity_mean = (Y_max - Y_min) / n
+        
         overall_mean_dp = np.mean(Y_full)+ laplace_noise(sensitivity_mean, eps1 * 0.1, size=1)
         overall_mean_dp=overall_mean_dp.astype('float32')[0]
         var1 = est_var_y(Y_full, n, eps1*0.9).astype('float32')[0]
