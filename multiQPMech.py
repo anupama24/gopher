@@ -243,11 +243,11 @@ def main():
         # Xmean_df['mean_score'] = (
         #     Xmean_df['SCORE1_SUM'] * np.sqrt(Xmean_df['dp_group_var']) + Xmean_df['dp_group_mean']
         # )
-        # mean_dp = Xmean_df['dp_group_mean'].to_numpy() 
+        # mean_dp = Xmean_df['mean_score'].to_numpy()
         # var1 = overall_var_dp
         # var_dp = var1* np.ones(len(mean_dp),dtype=np.float32)
         
-        mean_dp = Xmean_df['mean_score'].to_numpy()
+        mean_dp = Xmean_df['dp_group_mean'].to_numpy() 
         var_dp = Xmean_df['dp_group_var'].to_numpy()
         # var1 = overall_var_dp
 
