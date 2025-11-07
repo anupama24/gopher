@@ -158,6 +158,63 @@ def main():
     if tag == "real":
         # Compute group means/variances
         Xmean_df['Y'] = Y
+        
+        sensitivity_mean = (Y_max - Y_min) / n
+        overall_mean_dp = np.mean(Y_full)+ laplace_noise(sensitivity_mean, eps1 * 0.1, size=1)
+        overall_mean_dp=overall_mean_dp.astype('float32')[0]
+        var1 = est_var_y(Y_full, n, eps1*0.9).astype('float32')[0]
+        
+        sd = np.sqrt(var1)
+        lower,upper = stats.norm.interval(0.90, loc=overall_mean_dp, scale=sd)
+        lower,upper = max(np.min(Y_full), lower), min(np.max(Y_full), upper)
+        
+        print(lower,upper)
+        Xmean_df['X']= (Xmean_df['SCORE1_SUM']*np.sqrt(var1)) + overall_mean_dp
+        # Xmean_df['group'] = pd.qcut(Xmean_df['X'].rank(method='first'), q=args.quantiles, labels=False) + 1
+
+        # Compute 1st and 99th percentiles of Y for outlier bins
+        Xmean_df['group'] = np.nan
+
+        # Assign Q0 for below 1st percentile of Y
+        Xmean_df.loc[Xmean_df['Y'] <= lower, 'group'] = 'Q0'
+        # Assign Q8 for above 99th percentile of Y
+        Xmean_df.loc[Xmean_df['Y'] >= upper, 'group'] = 'Q8'
+
+        # Assign Q1–Q7 for values within 1–99th percentile using X
+        mask = (Xmean_df['Y'] > lower) & (Xmean_df['Y'] < upper)
+        Xmean_df.loc[mask, 'group'] = pd.qcut(
+            Xmean_df.loc[mask, 'X'].rank(method='first'), q=args.quantiles,
+            labels=[f'Q{i}' for i in range(1, args.quantiles+1)]
+        )
+
+        # Make categorical and ordered
+        bin_order = ['Q0'] + [f'Q{i}' for i in range(1, args.quantiles+1)] + ['Q8']
+        Xmean_df['group'] = Xmean_df['group'].astype('category')
+        Xmean_df['group'] = Xmean_df['group'].cat.reorder_categories(bin_order, ordered=True)
+
+    
+        # Count how many elements are in each group
+        counts = Xmean_df['group'].value_counts().sort_index()
+        # Convert to list of categories
+        groups = list(Xmean_df['group'].cat.categories)
+        # Find which groups have only one element
+        singletons = [g for g in groups if counts[g] == 1]
+
+        # Create a mapping to merge singleton group → next group
+        mapping = {}
+        for i, g in enumerate(groups[:-1]):  # skip last since it has no "next"
+            if g in singletons:
+                mapping[g] = groups[i + 1]
+        # If the last category has 1 element, merge it with the previous one
+        if counts[groups[-1]] == 1:
+            mapping[groups[-1]] = groups[-2]
+
+        # Apply the mapping
+        Xmean_df['group'] = Xmean_df['group'].replace(mapping)
+
+        # Recreate as categorical (optional)
+        Xmean_df['group'] = pd.Categorical(Xmean_df['group'], ordered=True)
+
         y_grouped = Xmean_df.groupby('group')['Y']
         y_group_mean = y_grouped.mean()
         y_group_var = y_grouped.var()
@@ -172,18 +229,20 @@ def main():
         dp_group_var = y_group_var + np.abs(laplace_noise(sensitivity_var, eps1 * 0.9, size=len(y_group_var)))
 
         # Global variance aggregation
-        overall_mean_dp = (group_counts * dp_group_mean).sum() / n
-        overall_var_dp = (group_counts * dp_group_var).sum() / n
-        between_group_var = ((group_counts * (dp_group_mean - overall_mean_dp) ** 2).sum()) / n
-        overall_var_dp += between_group_var
+        # overall_mean_dp = (group_counts * dp_group_mean).sum() / n
+        # overall_var_dp = (group_counts * dp_group_var).sum() / n
+        # between_group_var = ((group_counts * (dp_group_mean - overall_mean_dp) ** 2).sum()) / n
+        # overall_var_dp += between_group_var
 
         # Assign privatized stats
         Xmean_df['dp_group_mean'] = Xmean_df['group'].map(dp_group_mean)
         Xmean_df['dp_group_var'] = Xmean_df['group'].map(dp_group_var)
-
-        Xmean_df['mean_score'] = (
-            Xmean_df['SCORE1_SUM'] * np.sqrt(Xmean_df['dp_group_var']) + Xmean_df['dp_group_mean']
-        )
+        Xmean_df['dp_group_var'] = Xmean_df['dp_group_var'].astype(float)
+        Xmean_df['dp_group_mean'] = Xmean_df['dp_group_mean'].astype(float)
+        
+        # Xmean_df['mean_score'] = (
+        #     Xmean_df['SCORE1_SUM'] * np.sqrt(Xmean_df['dp_group_var']) + Xmean_df['dp_group_mean']
+        # )
         # mean_dp = Xmean_df['dp_group_mean'].to_numpy() 
         # var1 = overall_var_dp
         # var_dp = var1* np.ones(len(mean_dp),dtype=np.float32)
@@ -195,14 +254,16 @@ def main():
     else:
         # Simulated data case
         mean_dp = Xmean_df['SCORE1_SUM'].values
-        mean_dp = (mean_dp -np.mean(mean_dp))/np.std(mean_dp)
-        overall_var_dp = est_var_y(Y_full, n, args.eps).astype('float32')[0]
+        overall_mean_dp = np.mean(Y_full)+ laplace_noise(sensitivity_mean, args.eps * 0.1, size=1)
+        overall_mean_dp=overall_mean_dp.astype('float32')[0]
+        
+        overall_var_dp = est_var_y(Y_full, n, args.eps*0.9).astype('float32')[0]
         var_dp = np.full(len(mean_dp), overall_var_dp, dtype=np.float32)
-
-    print(f"DP Mean/Var prepared. DP-var: {overall_var_dp}. Example means: {mean_dp[:5]}, Var example: {var_dp[:5]}", flush=True)
+        
+    print(f"DP Mean/Var prepared. DP-mean: {overall_mean_dp}, DP-var: {overall_var_dp}. Example means: {mean_dp[:5]}, Var example: {var_dp[:5]}", flush=True)
 
     # Preprocessing for QP
-    Q1, Q2, B, Y_uniq, Y_hat, chunks = sample_pre_process(X_snp, Y, bins, mean_dp, var_dp,overall_var_dp, args.quantiles, seed, pheno_name)
+    Q1, Q2, B, Y_uniq, Y_hat, chunks = sample_pre_process(X_snp, Y, bins, mean_dp, var_dp,overall_mean_dp,overall_var_dp, args.quantiles, seed, pheno_name)
 
     optTot = args.optTot
     max_iter = args.itr
@@ -222,38 +283,37 @@ def main():
             out_file = f"MultiQP_sample_{args.sam}_eps_{eps_itr}_{pheno_name}.txt"
         # out_file = f"MultiLP_Priv_{args.sam}_eps_{eps_itr}_{pheno_name}.txt"
 
+
         # If file already exists, update; else create new
+        # --- Save privatized phenotypes ---
         if os.path.isfile(out_file):
             pc_df = pd.read_csv(out_file, sep='\t', index_col=0)
             pc_df.index = pc_df.index.astype(str)
-            pheno_df = pheno_df.copy()
-            pheno_df[pheno_name] = priv_Y
 
-            # Update pc_df for new privatized values
-            pc_df[pheno_name].update(pheno_df[pheno_name])
+            # Identify rows not in id_set
+            is_in_set = pc_df['IID'].isin(exclude_ids)
+            row_numbers = np.where(~is_in_set)[0]
+
+            # Extract the FIDs to update
+            fids_to_update = pheno_df.iloc[row_numbers].index.astype(str)
+            # print(len(fids_to_update))
+
+            # Assign new values safely
+            pc_df.loc[fids_to_update, pheno_name] = multi_Y_priv
+            # print(pc_df.head(),flush=True)
             
         else:
-            full_df = load_phenotype(pheno_file, sample_subset=None)
-            full_df.index = full_df.index.astype(str)
-            
-            pc_df = pd.DataFrame(index=full_df.index.copy())
-            pc_df.insert(0, 'FID', full_df.index.copy())
-            pc_df.insert(1, 'IID', full_df.index.copy())
+            pc_df = pd.DataFrame(index=pheno_df.index.copy())
+            pc_df.insert(0,'FID','')
+            pc_df.insert(1,'IID','')
+            pc_df['FID'] = pheno_df.index.copy()
+            pc_df['IID'] = pheno_df.index.copy()   
             pc_df = pc_df.set_index("FID")
-            pc_df[pheno_name] = np.nan
-            
-            pheno_df = pheno_df.copy()
-            pheno_df[pheno_name] = priv_Y
-
-            # Update pc_df for new privatized values
-            pc_df[pheno_name].update(pheno_df[pheno_name])
-
-            # Also update pc_df for LP privatized values (lp_df)
-            if lp_file is not None:
-                pc_df[pheno_name].update(lp_df[pheno_name])
-
-               
-        pc_df.to_csv(out_file, sep="\t", na_rep='NA', index=True)
+            pc_df[pheno_name] = multi_Y_priv
+            # pc_df[pheno_name].update(lp_df[pheno_name])
+            pc_df = pd.concat([pc_df, lp_df], axis=0)
+        
+        pc_df.to_csv(out_file, sep="\t", na_rep='NA',index=True)
         
     print(f"\n GOPHER-MultiQP mechanism completed for {pheno_name}.\n")
 

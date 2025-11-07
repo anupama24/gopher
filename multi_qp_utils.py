@@ -5,7 +5,7 @@ import scipy.stats as st
 import multiprocessing as mp
 from pathlib import Path
 from sklearn.cluster import KMeans
-from scipy.sparse.linalg import eigsh
+from scipy.sparse.linalg import eigsh,eigh
 from scipy.special import logsumexp
 from cvxopt import solvers, matrix, spmatrix
 
@@ -13,7 +13,7 @@ from cvxopt import solvers, matrix, spmatrix
 from utils import *
 from rr_lp_utils import *
 
-def sample_pre_process(Xarr, Y_full, bins, mean_dp, var_dp, overall_var,num_chunks, seed, pheno):
+def sample_pre_process(Xarr, Y_full, bins, mean_dp, var_dp, overall_mean_dp,overall_var,num_chunks, seed, pheno):
     """
     Prepare all pre-processing steps and matrices for the Multi-QP mechanism.
         1. Compute privatized phenotype probability distribution (Y_uniq, prob_y)
@@ -25,10 +25,10 @@ def sample_pre_process(Xarr, Y_full, bins, mean_dp, var_dp, overall_var,num_chun
     n, d = Xarr.shape
     
     # --- Step 1: Estimate phenotype distribution ---
-    Y_uniq, prob_y = prob_dist_Y(Y_full, bins, mean_dp, var_dp)
+    Y_uniq, prob_y = prob_dist_Y(Y_full, bins, mean_dp, var_dp,overall_mean_dp,overall_var)
     print(f"Original Y: bins={bins}, unique={Y_uniq.shape}", flush=True)
 
-    Y_hat, diff_yy = get_diff_YY(Y_full, Y_uniq, bins, mean_dp, var_dp)
+    Y_hat, diff_yy = get_diff_YY(Y_full, Y_uniq, bins,overall_mean_dp,overall_var)
     print(f"Y_hat size={Y_hat.shape}, diff_yy={diff_yy.shape}", flush=True)
     
     sz_y,sz_yhat = diff_yy.shape
@@ -78,7 +78,9 @@ def sample_pre_process(Xarr, Y_full, bins, mean_dp, var_dp, overall_var,num_chun
     # np.save(f"B_{B.shape}_{pheno}", B)
 
     # --- Step 5: Stabilize A matrix ---
-    eigval, _ = eigsh(2.0 * A, k=1, which='SA')
+    # eigval, _ = eigsh(2.0 * A, k=1, which='SA')
+    eigval, _ = eigh(2.0 * A, subset_by_index=[0, 0])  # smallest eigenvalue only
+    eigval = float(eigval[0])
     rho = max(-min(eigval.real), 0) + 1e-3
     Q2 = rho * np.eye(A.shape[0], dtype=np.float32)
     Q1 = 2.0 * A + Q2
@@ -103,10 +105,10 @@ def computeGRM(Xstd):
     return K
 
 
-def prob_dist_Y(Yarr, bins, mean, variance):
+def prob_dist_Y(Yarr, bins, mean, variance,overall_mean_dp,overall_var):
     """Estimate private probability distribution for continuous phenotype Y."""
-    sd = np.sqrt(np.mean(variance))
-    low, up = st.t.interval(0.99, df=len(Yarr)-1, loc=np.mean(mean), scale=sd)
+    sd = np.sqrt(overall_var)
+    low, up = st.t.interval(0.99, df=len(Yarr)-1, loc=overall_mean_dp, scale=sd)
     low, up = max(Yarr.min(), low), min(Yarr.max(), up)
     print(f"Clipped range: [{low:.3f}, {up:.3f}]", flush=True)
     
@@ -126,8 +128,8 @@ def prob_dist_Y(Yarr, bins, mean, variance):
 
 def get_diff_YY(Yarr, Y_uniq, bins, mean, var):
     """Construct matrix of differences between Y_uniq and discretized Y_hat."""
-    sd = np.sqrt(np.mean(var))
-    low, up = st.t.interval(0.99, df=len(Yarr)-1, loc=np.mean(mean), scale=sd)
+    sd = np.sqrt(var)
+    low, up = st.t.interval(0.99, df=len(Yarr)-1, loc=mean, scale=sd)
     low, up = max(Yarr.min(), low), min(Yarr.max(), up)
 
     bin_edges = np.linspace(low, up, num=bins+1)
@@ -275,7 +277,7 @@ def opt_dca(A,B,E,sz_y,sz_yhat,eps,max_iter,optTol,num_chunks):
         err = np.linalg.norm(currW - prevW, 2)**2 / (np.linalg.norm(prevW, 2)**2 + 1e-10)
         fval = 0.5 * (currW.T @ (A - E) @ currW) + B.T @ currW
 
-        print(f"Iteration {itr+1}: err={err:.3e}, obj={fval:.4f}",flush=True)
+        print(f"Iteration {itr+1}: err={err:.3e}, obj={fval}",flush=True)
 
         prev_fval = 0.5* (prevW.T @ (A-E)@ prevW) + B.T @ prevW
         if (err <= optTol or np.abs(fval-prev_fval) <= optTol ):
