@@ -5,7 +5,8 @@ import scipy.stats as st
 import multiprocessing as mp
 from pathlib import Path
 from sklearn.cluster import KMeans
-from scipy.sparse.linalg import eigsh,eigh
+from scipy.sparse.linalg import eigsh
+from scipy.linalg import eigh
 from scipy.special import logsumexp
 from cvxopt import solvers, matrix, spmatrix
 
