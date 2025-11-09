@@ -80,9 +80,12 @@ def sample_pre_process(Xarr, Y_full, bins, mean_dp, var_dp, overall_mean_dp,over
 
     # --- Step 5: Stabilize A matrix ---
     # eigval, _ = eigsh(2.0 * A, k=1, which='SA')
-    eigval, _ = eigh(2.0 * A, subset_by_index=[0, 0])  # smallest eigenvalue only
-    eigval = float(eigval[0])
-    rho = max(-min(eigval.real), 0) + 1e-3
+    # eigval, _ = eigh(2.0 * A, subset_by_index=[0, 0])  # smallest eigenvalue only
+    # eigval = float(eigval[0])
+    # rho = max(-min(eigval.real), 0) + 1e-3
+    eigval = eigh(2.0 * A, eigvals_only=True, subset_by_index=[0, 0])[0]
+    rho = max(-eigval.real, 0) + 1e-3
+
     Q2 = rho * np.eye(A.shape[0], dtype=np.float32)
     Q1 = 2.0 * A + Q2
     print(f"Stabilization rho={rho:.5f}, Q1 range=({np.min(Q1):.5e}, {np.max(Q1):.5e})", flush=True)
