@@ -249,7 +249,7 @@ def main():
         
         mean_dp = Xmean_df['dp_group_mean'].to_numpy() 
         var_dp = Xmean_df['dp_group_var'].to_numpy()
-        # var1 = overall_var_dp
+        overall_var_dp = var1
 
     else:
         # Simulated data case
