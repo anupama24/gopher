@@ -269,51 +269,51 @@ def main():
     max_iter = args.itr
         
     # Run Multi-LP across all epsilon values
-    for eps_itr in eps_all:
+#     for eps_itr in eps_all:
         
-        eps_temp = eps_itr - eps1
-        print(f"\n Running Multi-QP for ε = {eps_itr}", flush=True)
+#         eps_temp = eps_itr - eps1
+#         print(f"\n Running Multi-QP for ε = {eps_itr}", flush=True)
         
-        sol = opt_dca(Q1, B, Q2, Y_uniq.shape[0], Y_hat.shape[0], eps_temp, max_iter, optTot, 7)
-        priv_Y = save_QP_Yhat(sol, Y_full, Y_uniq, Y_hat, seed, chunks)
+#         sol = opt_dca(Q1, B, Q2, Y_uniq.shape[0], Y_hat.shape[0], eps_temp, max_iter, optTot, 7)
+#         priv_Y = save_QP_Yhat(sol, Y_full, Y_uniq, Y_hat, seed, chunks)
 
-        if h2 is not None:
-            out_file =  f"MultiQP_sample_{args.sam}_eps_{eps_itr}_{pheno_name}_h2_{h2}.txt"
-        else:
-            out_file = f"MultiQP_sample_{args.sam}_eps_{eps_itr}_{pheno_name}.txt"
-        # out_file = f"MultiLP_Priv_{args.sam}_eps_{eps_itr}_{pheno_name}.txt"
+#         if h2 is not None:
+#             out_file =  f"MultiQP_sample_{args.sam}_eps_{eps_itr}_{pheno_name}_h2_{h2}.txt"
+#         else:
+#             out_file = f"MultiQP_sample_{args.sam}_eps_{eps_itr}_{pheno_name}.txt"
+#         # out_file = f"MultiLP_Priv_{args.sam}_eps_{eps_itr}_{pheno_name}.txt"
 
 
-        # If file already exists, update; else create new
-        # --- Save privatized phenotypes ---
-        if os.path.isfile(out_file):
-            pc_df = pd.read_csv(out_file, sep='\t', index_col=0)
-            pc_df.index = pc_df.index.astype(str)
+#         # If file already exists, update; else create new
+#         # --- Save privatized phenotypes ---
+#         if os.path.isfile(out_file):
+#             pc_df = pd.read_csv(out_file, sep='\t', index_col=0)
+#             pc_df.index = pc_df.index.astype(str)
 
-            # Identify rows not in id_set
-            is_in_set = pc_df['IID'].isin(exclude_ids)
-            row_numbers = np.where(~is_in_set)[0]
+#             # Identify rows not in id_set
+#             is_in_set = pc_df['IID'].isin(exclude_ids)
+#             row_numbers = np.where(~is_in_set)[0]
 
-            # Extract the FIDs to update
-            fids_to_update = pheno_df.iloc[row_numbers].index.astype(str)
-            # print(len(fids_to_update))
+#             # Extract the FIDs to update
+#             fids_to_update = pheno_df.iloc[row_numbers].index.astype(str)
+#             # print(len(fids_to_update))
 
-            # Assign new values safely
-            pc_df.loc[fids_to_update, pheno_name] = multi_Y_priv
-            # print(pc_df.head(),flush=True)
+#             # Assign new values safely
+#             pc_df.loc[fids_to_update, pheno_name] = multi_Y_priv
+#             # print(pc_df.head(),flush=True)
             
-        else:
-            pc_df = pd.DataFrame(index=pheno_df.index.copy())
-            pc_df.insert(0,'FID','')
-            pc_df.insert(1,'IID','')
-            pc_df['FID'] = pheno_df.index.copy()
-            pc_df['IID'] = pheno_df.index.copy()   
-            pc_df = pc_df.set_index("FID")
-            pc_df[pheno_name] = multi_Y_priv
-            # pc_df[pheno_name].update(lp_df[pheno_name])
-            pc_df = pd.concat([pc_df, lp_df], axis=0)
+#         else:
+#             pc_df = pd.DataFrame(index=pheno_df.index.copy())
+#             pc_df.insert(0,'FID','')
+#             pc_df.insert(1,'IID','')
+#             pc_df['FID'] = pheno_df.index.copy()
+#             pc_df['IID'] = pheno_df.index.copy()   
+#             pc_df = pc_df.set_index("FID")
+#             pc_df[pheno_name] = multi_Y_priv
+#             # pc_df[pheno_name].update(lp_df[pheno_name])
+#             pc_df = pd.concat([pc_df, lp_df], axis=0)
         
-        pc_df.to_csv(out_file, sep="\t", na_rep='NA',index=True)
+#         pc_df.to_csv(out_file, sep="\t", na_rep='NA',index=True)
         
     print(f"\n GOPHER-MultiQP mechanism completed for {pheno_name}.\n")
 
