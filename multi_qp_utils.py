@@ -80,7 +80,7 @@ def sample_pre_process(Xarr, Y_full, bins, mean_dp, var_dp, overall_mean_dp,over
     
     np.save(f"Y_uniq_{pheno}",Y_uniq)
     np.save(f"Y_hat_{pheno}",Y_hat)
-    np.save(f"chunks_{pheno}",chunks)
+    # np.save(f"chunks_{pheno}",chunks)
     # --- Step 5: Stabilize A matrix ---
     # eigval, _ = eigsh(2.0 * A, k=1, which='SA')
     # eigval, _ = eigh(2.0 * A, subset_by_index=[0, 0])  # smallest eigenvalue only
