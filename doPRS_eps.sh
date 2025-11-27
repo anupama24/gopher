@@ -1,19 +1,16 @@
 #!/bin/bash
 
-# Install plink
-wget -q https://s3.amazonaws.com/plink2-assets/plink2_linux_x86_64_latest.zip > /dev/null 2>&1
-unzip -q plink2_linux_x86_64_latest.zip > /dev/null 2>&1
-chmod +x plink2
-git clone https://github.com/getian107/PRScs.git PRScs
+# # Install plink
+# wget -q https://s3.amazonaws.com/plink2-assets/plink2_linux_x86_64_latest.zip > /dev/null 2>&1
+# unzip -q plink2_linux_x86_64_latest.zip > /dev/null 2>&1
+# chmod +x plink2
+# git clone https://github.com/getian107/PRScs.git PRScs
 curl -O https://personal.broadinstitute.org/hhuang/public/PRS-CSx/Reference/UKBB/ldblk_ukbb_eur.tar.gz
 tar xvfz ldblk_ukbb_eur.tar.gz --no-same-owner
 
-rm plink2_linux_x86_64_latest.zip
+# rm plink2_linux_x86_64_latest.zip
 rm ldblk_ukbb_eur.tar.gz
 
-# pip install plink
-# pip install scipy
-# pip install h5py
 
 # Set static paths
 data_field="ukb_imp_qc"

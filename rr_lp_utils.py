@@ -66,7 +66,7 @@ def RR_on_bins(Yarr, eps, eps1, bins, seed):
 
     # Differentially Private mean and variance
     mean_dp = np.mean(Y) + laplace_noise((Y.max() - Y.min()) / n, eps1 * 0.1, 1)
-    std_dp = np.sqrt(np.var(Y) + laplace_noise((Y.max() - Y.min()) ** 2 / n, 0.9 * eps1, 1))
+    std_dp = np.sqrt(np.var(Y) + np.abs(laplace_noise((Y.max() - Y.min()) ** 2 / n, 0.9 * eps1, 1)))
     print(f"DP mean={mean_dp.astype('float32')[0]:.3f}, DP std={std_dp.astype('float32')[0]:.3f}", flush=True)
 
     # Construct probability map

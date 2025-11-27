@@ -55,14 +55,51 @@ All experiments require access to a high-performance multi-processor system with
 
 ## Usage
 
-###Input Data
+## Input Data
 
-### Example Data
-We provide an example synthetic dataset in the `example_data/` directory. 
+### Example Data  
+The `data/` directory contains a **minimal, self-contained subset of 1000 Genomes Phase 3 (1000G)** data.  
+This lightweight dataset is provided to support **quick testing, validation, and illustration** of the workflow without requiring the full 1000G dataset.
 
-### Main Input Data Files
+---
 
-- `geno/chr[1-22].{pgen, psam, pvar}`: PGEN-format genotype data files for chromosomes 1 through 22.
+### Download and decompress 1000 Genomes phase 3 data
+1000 Genomes phase III (1000GenomesIII) is available in
+[PLINK 2 binary format](https://www.cog-genomics.org/plink/2.0/input#pgen) at https://www.cog-genomics.org/plink/2.0/resources#1kg_phase3.
+In addition, a sample file with information about the individuals' ancestry
+is available. 
+The following code chunk downloads and decompresses the data.
+The genome build of
+these files is the same as the original release of the 1000GenomesIII, namely
+CGRCh37. 
+
+```bash
+cd data
+
+pgen=https://www.dropbox.com/s/j72j6uciq5zuzii/all_hg38.pgen.zst?dl=1
+pvar=https://www.dropbox.com/s/vx09262b4k1kszy/all_hg38.pvar.zst?dl=1
+sample=https://www.dropbox.com/s/2e87z6nc4qexjjm/all_hg38.psam?dl=1
+
+wget $pgen
+mv 'all_hg38.pgen.zst?dl=1' all_hg38.pgen.zst
+plink2 --zst-decompress all_hg38.pgen.zst > all_hg38.pgen
+
+wget $pvar
+mv 'all_hg38.pvar.zst?dl=1' all_hg38.pvar.zst
+
+wget $sample
+mv 'all_hg38.psam?dl=1' all_hg38.psam
+```
+
+### Main UKBiobank Input Data Files
+
+The pipeline expects **imputed UK Biobank genotype data in BGEN format**, organized as:
+
+- `data/chr[1–22].bgen`  
+- `data/chr[1–22].sample`  
+These are the standard per-chromosome imputed genotype files for chromosomes **1–22**.  
+The pipeline automatically converts each BGEN file into PLINK2 PGEN format during QC.
+
 - `pheno.txt`: Phenotype file; each line contains the phenotype value for each sample listed in the corresponding `.psam` file.
 - `sample_keep.txt`: A list of sample IDs (from the `.psam` file) to include in the analysis. This is used with the `--keep` flag in PLINK2. (See [PLINK2 file specification](https://www.cog-genomics.org/plink/2.0/input#keep) for more details.)
 
@@ -71,7 +108,7 @@ We provide an example synthetic dataset in the `example_data/` directory.
 The GOPHER pipeline automates the full process from raw genotype data to private GWAS results. It includes quality control, phenotype simulation, privacy mechanism application, and downstream GWAS analysis. The steps are as follows:
 
 1. **Genotype Quality Control (QC)**  
-   Genotype data is filtered using the `doQC.sh` script. This typically includes filtering on minor allele frequency (MAF), genotype missingness, sample missingness, and Hardy-Weinberg equilibrium (HWE), following standard GWAS practices.
+   Genotype data is filtered using the `run_qc_chr1_22.sh` script. This script performs **per-chromosome PLINK2 quality control** on imputed UK Biobank BGEN data,**merges all chromosomes**, and **subsets individuals** based on a user-specified sample list  (e.g., unrelated or related).
 
 2. **Phenotype Simulation**  
    Phenotypes are simulated from the genotype data based on a specified heritability parameter (`h2`). This step allows for controlled experimentation using synthetic data with known genetic architecture.
@@ -84,12 +121,12 @@ The GOPHER pipeline automates the full process from raw genotype data to private
 
 5. **Privacy Mechanism Application**  
    One of the supported privacy mechanisms is applied to the phenotype to ensure differential privacy:
-   - **LP** (Local Perturbation)
    - **RR** (Randomized Response)
    - **Lap** (Laplace Mechanism)
-   - **QP** (Quadratic Programming)
-   - **MultiLP** (Multi-party Linear Programming)
-   - **MultiQP** (Multi-party Quadratic Programming)
+   - **GOPHER-LP** (RR-on-bins)
+   - **GOPHER-QP** 
+   - **GOPHER-MultiLP** 
+   - **GOPHER-MultiQP** 
 
    These mechanisms generate privatized versions of the phenotype that can be shared or analyzed while preserving individual privacy.
 
@@ -103,12 +140,92 @@ The GOPHER pipeline automates the full process from raw genotype data to private
 
 Each step is configurable, allowing researchers to adapt the pipeline for their own datasets and privacy constraints.
 
-### Data Preprocessing
+### 1. Data Preprocessing
+Before running simulations or downstream analyses, the genotype data are preprocessed to ensure quality and compatibility:
 
-### Running GOPHER
-To run the phenotype randomization mechanisms with differential privacy guarantees:
+- **Format conversion:** Convert genotype files into PLINK2 PGEN format (if needed) for efficient computation.
+- **Quality control (QC):** Apply standard QC filters:
+  - Remove variants with high missingness (`--geno` threshold)
+  - Filter variants with low minor allele frequency (`--maf`)
+  - Exclude variants failing Hardy-Weinberg equilibrium (`--hwe`)
+  - Retain only bi-allelic SNPs
+- **Sample selection:** Subset to a set of unrelated or target samples using a provided `keep` file.
+- **Variant selection:** Optionally subset to HapMap3 or other reference variants.
+- **Output:** Cleaned, filtered `.pgen/.pvar/.psam` files ready for phenotype simulation or GWAS analysis.
 
+---
+
+IF working with simulated phenotypes, they are simulated from the preprocessed genotype data based on a user-specified **heritability (`h2`)**. This allows controlled experimentation with synthetic traits of known genetic architecture.
+### 2. Phenotype Simulation
+- **Inputs:** 
+  - Genotype files (`.pgen`, `.pvar`, `.psam`)
+  - Heritability parameter (`h2`)
+- **Process:**
+  - Assign random effect sizes to a subset of causal variants
+  - Generate phenotype values by combining genetic effects with normally distributed environmental noise
+- **Outputs:** 
+  - Phenotype file (e.g., `simulated_pheno.txt`) compatible with PLINK2 or downstream analysis pipelines
+
+---
+
+This workflow demonstrates how to run QC on BGEN genotype files and simulate phenotypes using the provided scripts.
+
+```bash
+# 1. Run QC on BGEN files and generate a PLINK2 dataset
+bash run_qc_chr1_22.sh \
+    "/path/to/bgen_files" \
+    "/data" \
+    "hapmap3_r2_ref.txt" \
+    "ukb22828_c{chr}_b0_v3" \
+    "keep_unrelated.txt" \
+    "unrelated"
+
+# 2. Simulate phenotypes with 0.8 heritability
+python simulate_phenotypes.py \
+    --data-path /data \
+    --geno-prefix ukb_qc_thinned_unrelated_samples \
+    --h2 0.8
+```
+    
+# Running GOPHER
+## Baseline Methods
+
+The `baselineMethods.py` script implements **Laplace** and **Randomized Response (RR)** mechanisms to produce privacy-preserving versions of phenotypes. This allows experimentation with differential privacy in GWAS or synthetic datasets.
+
+---
+
+### Usage Example
+
+```bash
+python baselineMethods.py \
+    --pheno_file simulated_phenotypes.txt \
+    --pheno Sim_Y_100 \
+    --mech both \
+    --eps_list 1.0,2.0 \
+    --dest ./results \
+    --seed 1234 \
+    --bins 100 \
+    --h2 0.8
+```
+
+## GOPHER-LP: 
+The `runLPMech.py` script implements the **GOPHER-LP mechanism** (Randomized Response on discretized bins) to generate privacy-preserving phenotypes across multiple privacy budgets (ε). It can be applied to any simulated or real phenotype dataset in tab-delimited format.
+
+---
+
+### Usage Example
+
+```bash
+python runLPMech.py \
+    --pheno_file data/simulated_phenotypes_unrelated_samples.txt \
+    --pheno Sim_Y_100 \
+    --eps_list 1.0,2.0 \
+    --dest results/LP \
+    --bins 100 \
+    --seed 1234 \
+    --sam 10000 \
+    --eps 0.1
+```
 
 ### Output
 Differentially private phenotype values are saved in the specified output directory, ready for downstream analysis with formal privacy guarantees.
-
