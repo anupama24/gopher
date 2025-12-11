@@ -40,7 +40,7 @@ def parse_args():
     parser.add_argument('--seed', default=1234, type=int, help='Random seed for reproducibility')
     parser.add_argument('--bins', default=100, type=int, help='Number of discrete bins for continuous phenotype')
     parser.add_argument('--eps', default=0.1, type=float, help='Privacy budget for prior (default: 0.1)')
-    parser.add_argument('--sam', default=10000, type=int, help='Sample size (used in output naming)')
+    parser.add_argument('--sam', default=None, type=int, help='Sample size')
     parser.add_argument('--h2', default=None, type=float, help='Optional heritability for output naming')
 
     return parser.parse_args()
@@ -67,7 +67,6 @@ def main():
     seed = args.seed
     bins = args.bins
     eps1 = args.eps
-    sam = args.sam
     h2 = args.h2
 
 
@@ -82,6 +81,10 @@ def main():
     Y_full = pheno_df[pheno_name].to_numpy(dtype=np.float32)
     print(f"Loaded phenotype '{pheno_name}' with shape: {Y_full.shape}", flush=True)
 
+    if args.sam:
+        sam = args.sam
+    else:
+        sam= Y_full.shape[0]
     # Apply LP mechanism for each epsilon
     print(f"\nRunning GOPHER-LP mechanism on phenotype: {pheno_name}", flush=True)
 

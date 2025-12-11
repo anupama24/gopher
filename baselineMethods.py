@@ -100,13 +100,13 @@ def main():
     dest.mkdir(parents=True, exist_ok=True)
 
     # Create mechanism-specific subfolders only if needed
-    lap_dir = dest #/ "Laplace"
-    rr_dir = dest #/ "RR"
+    lap_dir = dest / "Laplace"
+    rr_dir = dest / "RR"
 
-    # if args.mech in ["laplace", "both"]:
-    #     lap_dir.mkdir(parents=True, exist_ok=True)
-    # if args.mech in ["rr", "both"]:
-    #     rr_dir.mkdir(parents=True, exist_ok=True)
+    if args.mech in ["laplace", "both"]:
+        lap_dir.mkdir(parents=True, exist_ok=True)
+    if args.mech in ["rr", "both"]:
+        rr_dir.mkdir(parents=True, exist_ok=True)
         
     eps_all = [float(eps) for eps in args.eps_list.split(",")]
     pheno_file = Path(args.pheno_file)

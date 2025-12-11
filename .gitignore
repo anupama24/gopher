@@ -15,4 +15,6 @@ __pycache__/
 venv/
 .env
 
-data/g1000_eur.*
+# Project data and results folders (ignore all contents)
+data/
+results/

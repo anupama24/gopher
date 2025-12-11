@@ -121,4 +121,4 @@ for varNum in causal_variant_counts:
     pheno_df[pheno_name] = sim_y
     pheno_df.to_csv(pheno_file, sep='\t', na_rep='NA',index=True)
 
-print("\n Simulated phenotype file generated successfully.")
+print(f"\n Simulated phenotype file {pheno_file} generated successfully.")

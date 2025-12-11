@@ -108,7 +108,11 @@ The pipeline automatically converts each BGEN file into PLINK2 PGEN format durin
 The GOPHER pipeline automates the full process from raw genotype data to private GWAS results. It includes quality control, phenotype simulation, privacy mechanism application, and downstream GWAS analysis. The steps are as follows:
 
 1. **Genotype Quality Control (QC)**  
-   Genotype data is filtered using the `run_qc_chr1_22.sh` script. This script performs **per-chromosome PLINK2 quality control** on imputed UK Biobank BGEN data,**merges all chromosomes**, and **subsets individuals** based on a user-specified sample list  (e.g., unrelated or related).
+Genotype data is filtered using the `run_qc_chr1_22.sh` or `run_qc_generic.sh` script. This script applies the following standard QC filters:
+  - Remove variants with high missingness (`--geno` threshold)
+  - Filter variants with low minor allele frequency (`--maf`)
+  - Exclude variants failing Hardy-Weinberg equilibrium (`--hwe`)
+  - Retain only bi-allelic SNPs
 
 2. **Phenotype Simulation**  
    Phenotypes are simulated from the genotype data based on a specified heritability parameter (`h2`). This step allows for controlled experimentation using synthetic data with known genetic architecture.
@@ -130,10 +134,7 @@ The GOPHER pipeline automates the full process from raw genotype data to private
 
    These mechanisms generate privatized versions of the phenotype that can be shared or analyzed while preserving individual privacy.
 
-6. **Result Combination for Multi-Sample Methods**  
-   For methods involving multiple parties or samples (e.g., MultiLP, MultiQP), results from each party are aggregated. This may involve secure aggregation protocols or trusted intermediaries, depending on the setup.
-
-7. **Private GWAS Execution**  
+6. **Private GWAS Execution**  
    For each specified privacy budget (`ε`), a private GWAS is run using PLINK2 on the privatized phenotypes. This produces differential privacy-compliant association statistics for downstream interpretation.
 
 ---
@@ -144,19 +145,43 @@ Each step is configurable, allowing researchers to adapt the pipeline for their 
 Before running simulations or downstream analyses, the genotype data are preprocessed to ensure quality and compatibility:
 
 - **Format conversion:** Convert genotype files into PLINK2 PGEN format (if needed) for efficient computation.
-- **Quality control (QC):** Apply standard QC filters:
-  - Remove variants with high missingness (`--geno` threshold)
-  - Filter variants with low minor allele frequency (`--maf`)
-  - Exclude variants failing Hardy-Weinberg equilibrium (`--hwe`)
-  - Retain only bi-allelic SNPs
+- **Quality control (QC):** Apply standard QC filters.
 - **Sample selection:** Subset to a set of unrelated or target samples using a provided `keep` file.
-- **Variant selection:** Optionally subset to HapMap3 or other reference variants.
 - **Output:** Cleaned, filtered `.pgen/.pvar/.psam` files ready for phenotype simulation or GWAS analysis.
+
+The repository supports both UK Biobank imputed data and generic genotype datasets. The `run_qc_chr1_22.sh` script is specifically designed for **UK Biobank** imputed genotype data. Following are the features of this script:
+- Variant selection: Optionally subset to HapMap3 or other reference variants.
+- Per-chromosome QC on chromosomes 1–22
+- Filtering on genotype quality, minor allele frequency, Hardy-Weinberg equilibrium, and SNPs
+- Merging all chromosomes
+- Optional subsetting of individuals (e.g., unrelated or related)
+
+**Usage:**
+```bash
+bash run_qc_chr1_22.sh <input_dir> <output_dir> <hapmap_file> <file_prefix> <keep_file> <tag>
+```
+The `run_qc_generic.sh` script provides a **flexible QC pipeline** that works with any genotype dataset, including **PGEN, BED, or BGEN** formats. It gives the flexibility to do  the following:
+- QC for a single dataset or per chromosome (1–22) and then merging them
+- Optional variant filtering via a variant list
+- Optional sample subsetting via a sample list
+
+**Usage:**
+
+```bash
+bash run_qc_generic.sh \
+    --mode {single|chr} \
+    --input_dir <dir> \
+    --pattern <file_prefix_or_chr_pattern> \
+    [--variant_file <variants_to_keep.txt>] \
+    [--keep <sample_list>] \
+    --outdir <output_dir> \
+    --tag <name>
+```
 
 ---
 
-IF working with simulated phenotypes, they are simulated from the preprocessed genotype data based on a user-specified **heritability (`h2`)**. This allows controlled experimentation with synthetic traits of known genetic architecture.
 ### 2. Phenotype Simulation
+IF working with simulated phenotypes, they are simulated from the preprocessed genotype data based on a user-specified **heritability (`h2`)**. This allows controlled experimentation with synthetic traits of known genetic architecture.
 - **Inputs:** 
   - Genotype files (`.pgen`, `.pvar`, `.psam`)
   - Heritability parameter (`h2`)
@@ -166,12 +191,25 @@ IF working with simulated phenotypes, they are simulated from the preprocessed g
 - **Outputs:** 
   - Phenotype file (e.g., `simulated_pheno.txt`) compatible with PLINK2 or downstream analysis pipelines
 
+**Usage:**
+```
+python simulate_phenotypes.py [options]
+```
+**Options:**
+`--data-path`: Directory containing `.pgen`, `.pvar`, and `.psam` files.
+`--geno-prefix`: Prefix of genotype files.
+`--pheno-file` : Output phenotype file path.
+`--h2` : Heritability for phenotype simulation.
+`--seed`: Random seed for reproducibility.
+`--chunk-size`: Number of variants processed per chunk.
+
 ---
 
 This workflow demonstrates how to run QC on BGEN genotype files and simulate phenotypes using the provided scripts.
 
+**Example:**
 ```bash
-# 1. Run QC on BGEN files and generate a PLINK2 dataset
+# 1. Run QC on UKB BGEN files and generate a PLINK2 dataset
 bash run_qc_chr1_22.sh \
     "/path/to/bgen_files" \
     "/data" \
@@ -196,7 +234,7 @@ The `baselineMethods.py` script implements **Laplace** and **Randomized Response
 
 ### Usage Example
 
-```bash
+```
 python baselineMethods.py \
     --pheno_file simulated_phenotypes.txt \
     --pheno Sim_Y_100 \
@@ -215,17 +253,15 @@ The `runLPMech.py` script implements the **GOPHER-LP mechanism** (Randomized Res
 
 ### Usage Example
 
-```bash
+```
 python runLPMech.py \
-    --pheno_file data/simulated_phenotypes_unrelated_samples.txt \
+    --pheno_file ./data/simulated_phenotypes.txt \
     --pheno Sim_Y_100 \
     --eps_list 1.0,2.0 \
-    --dest results/LP \
+    --dest ./results/LP \
     --bins 100 \
     --seed 1234 \
     --sam 10000 \
     --eps 0.1
 ```
 
-### Output
-Differentially private phenotype values are saved in the specified output directory, ready for downstream analysis with formal privacy guarantees.
