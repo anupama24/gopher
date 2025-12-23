@@ -25,6 +25,7 @@ from pgen_reader import *
 from functions import *
 from utils import *
 from rr_lp_utils import *
+from calcDPMeanVar import est_DPMean_Var
 
 # ---------------------------------------------------------------------
 #  Command-line arguments
@@ -36,12 +37,16 @@ def parse_args():
     parser.add_argument('--dest', default=None, help='Path to destination folder (default: current directory)')
     parser.add_argument('--pheno_file', required=True, help='Path to phenotype file')
     parser.add_argument('--pheno', default="Sim_Y_100", type=str, help='Phenotype name to privatize')
-    parser.add_argument('-el', '--eps_list', default=None, help='Comma-separated list of ε values (e.g., 0.5,1,2)')
+    parser.add_argument('-el', '--eps_list', default=None, help='Space-separated list of ε values (e.g., 0.5 1 2)')
     parser.add_argument('--seed', default=1234, type=int, help='Random seed for reproducibility')
     parser.add_argument('--bins', default=100, type=int, help='Number of discrete bins for continuous phenotype')
     parser.add_argument('--eps', default=0.1, type=float, help='Privacy budget for prior (default: 0.1)')
     parser.add_argument('--sam', default=None, type=int, help='Sample size')
     parser.add_argument('--h2', default=None, type=float, help='Optional heritability for output naming')
+
+    # Add optional mean and variance input
+    parser.add_argument('--mean', type=float, default=None, help='Optional DP mean of phenotype')
+    parser.add_argument('--var', type=float, default=None, help='Optional DP variance of phenotype')
 
     return parser.parse_args()
 
@@ -52,12 +57,12 @@ def main():
     # Setup destination folder
     dest = Path(args.dest) if args.dest else Path.cwd()
     dest.mkdir(parents=True, exist_ok=True)
-    out_path = dest #/ "LP"
-    # out_path.mkdir(parents=True, exist_ok=True)
+    out_path = dest / "LP"
+    out_path.mkdir(parents=True, exist_ok=True)
 
     # Handle epsilon list
     if args.eps_list:
-        eps_all = [float(item) for item in args.eps_list.split(',')]
+        eps_all = [float(item) for item in args.eps_list.split(' ')]
     else:
         eps_all = [1.0, 2.0, 3.0, 4.0, 5.0]
 
@@ -69,6 +74,10 @@ def main():
     eps1 = args.eps
     h2 = args.h2
 
+    if args.mean is None or args.var is None:
+        mean, var = est_DPMean_Var(args.pheno_file, args.pheno)
+    else:
+        mean, var = args.mean, args.var
 
     # Log configuration
     print("\n===== Configuration =====")
@@ -90,7 +99,7 @@ def main():
 
     for eps_itr in eps_all:
         # Apply privacy mechanism
-        Y_priv = RR_on_bins(Y_full, eps_itr, eps1, bins, seed)
+        Y_priv = RR_on_bins(Y_full, mean,var, eps_itr, eps1, bins, seed)
 
         # Define output file name
         out_file = out_path / f"LP_sample_{sam}_eps_{eps_itr}_{pheno_name}.txt"

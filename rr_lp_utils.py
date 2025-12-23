@@ -58,19 +58,20 @@ def save_RR_Yhat(label_cls, Y_full, Y_uniq, temp_y, eps, seed):
 # GOPHER-LP (RR-on-bins)
 ########################################################
 
-def RR_on_bins(Yarr, eps, eps1, bins, seed):
+def RR_on_bins(Yarr,mean_dp,var_dp, eps, eps1, bins, seed):
     """Run RR-on-bins mechanism on continuous phenotype values."""
     Y = Yarr[~np.isnan(Yarr)]
     n = Y.shape[0]
     print(f"Max(Y)={Y.max():.3f}, Min(Y)={Y.min():.3f}", flush=True)
 
     # Differentially Private mean and variance
-    mean_dp = np.mean(Y) + laplace_noise((Y.max() - Y.min()) / n, eps1 * 0.1, 1)
-    std_dp = np.sqrt(np.var(Y) + np.abs(laplace_noise((Y.max() - Y.min()) ** 2 / n, 0.9 * eps1, 1)))
-    print(f"DP mean={mean_dp.astype('float32')[0]:.3f}, DP std={std_dp.astype('float32')[0]:.3f}", flush=True)
+    # mean_dp = np.mean(Y) + laplace_noise((Y.max() - Y.min()) / n, eps1 * 0.1, 1)
+    # std_dp = np.sqrt(np.var(Y) + np.abs(laplace_noise((Y.max() - Y.min()) ** 2 / n, 0.9 * eps1, 1)))
+    std_dp = np.sqrt(var_dp)
+    print(f"DP mean={mean_dp:.3f}, DP std={std_dp:.3f}", flush=True)
 
     # Construct probability map
-    prob_map = norm_prob_dist(Y,mean_dp.astype('float32')[0],std_dp.astype('float32')[0], bins)
+    prob_map = norm_prob_dist(Y,mean_dp,std_dp, bins)
     Y_uniq = np.fromiter(prob_map.keys(), dtype=np.float32)
     prob_y = np.fromiter(prob_map.values(), dtype=float)
 
@@ -84,32 +85,49 @@ def RR_on_bins(Yarr, eps, eps1, bins, seed):
     Y_priv = save_RR_Yhat(label_cls, Yarr, Y_uniq, temp_y, eps2, seed)
     return Y_priv
 
-
-    
-    
 ########################################################
 # GOPHER-MultiLP (Parallel RR-on-bins)
 ########################################################
-def pool_rr_on_bins(Yarr, bins, eps, eps1, mean_dp, var_dp, seed):
+def pool_rr_on_bins(Yarr, bins, eps, eps1, mean_dp, var_dp,overall_mean,overall_var,num_chunks,seed):
     """Run parallel RR-on-bins for personalized DP priors."""
     Y = Yarr[~np.isnan(Yarr)]
     n = Y.shape[0]
 
-    Y_uniq, prob_y = ind_prob_dist(Y, bins, mean_dp, var_dp, eps1)
     eps2 = eps - eps1
-
+    print(eps2,flush=True)
     rng = np.random.RandomState(seed)
-    num_chunks = 1000
-    indices = np.arange(mean_dp.shape[0])
-    rng.shuffle(indices)
-    chunks = np.array_split(indices, num_chunks)
-
+    
+    # indices = np.arange(mean_dp.shape[0])
+    # rng.shuffle(indices)
+    # chunks = np.array_split(indices, num_chunks)
+    
+    kmeans = KMeans(n_clusters=num_chunks, random_state=seed)
+    kmeans.fit(mean_dp.reshape(-1, 1))
+    labels = kmeans.labels_
+    clustered_indices = {i: np.where(labels == i)[0] for i in range(np.max(labels) + 1)}
+    chunks = [clustered_indices[i] for i in range(len(clustered_indices))]
+    print(f"Formed {len(chunks)} clusters", flush=True)
+    
     print(f"Running Multi-LP with {len(chunks)} chunks on {mp.cpu_count()} cores...", flush=True)
-    with mp.Pool(processes=mp.cpu_count(), maxtasksperchild=5) as pool:
-        results = pool.map(opt_rr, [(prob_y[chunk, :], Y_uniq, Y[chunk], bins, eps2, rng, i)
-                                    for i, chunk in enumerate(chunks)])
+    
+    # Y_priv= RR_on_bins(Yarr, eps, eps1, bins, seed)
+    if len(chunks) < 10:
+        with mp.Pool(processes=mp.cpu_count(), maxtasksperchild=5) as pool:
+            results = pool.map(real_opt_rr, [(Y[chunk],np.mean(mean_dp[chunk]), np.mean(var_dp[chunk]),bins, eps2, rng, i) for i, chunk in enumerate(chunks)])
+        temp = np.concatenate(results)
 
-    temp = np.concatenate(results)
+    else:
+        Y_uniq, prob_y = ind_prob_dist(Y, bins, mean_dp, var_dp,overall_mean,overall_var, eps1)
+
+        indices = np.arange(mean_dp.shape[0])
+        rng.shuffle(indices)
+        chunks = np.array_split(indices, num_chunks)
+        # print(f"Formed {len(chunks)} clusters", flush=True)
+        with mp.Pool(processes=mp.cpu_count(), maxtasksperchild=5) as pool:
+            results = pool.map(opt_rr, [(prob_y[chunk, :], Y_uniq, Y[chunk], bins, eps2, rng, i)
+                                        for i, chunk in enumerate(chunks)])
+        temp = np.concatenate(results)
+        
     nan_idx = np.where(np.isnan(Yarr))[0]
     Y_priv = np.zeros_like(Yarr)
     index = 0
@@ -122,10 +140,12 @@ def pool_rr_on_bins(Yarr, bins, eps, eps1, mean_dp, var_dp, seed):
     return Y_priv
 
 
-def ind_prob_dist(Yarr, bins, mean, variance, eps1):
-    """Estimate personalized prior using Gaussian distribution."""
-    sd = np.sqrt(np.mean(variance))
-    low, up = stats.norm.interval(0.99, loc=np.mean(mean), scale=sd)
+def ind_prob_dist(Yarr, bins, mean, variance,overall_mean,overall_var, eps1):
+    """Estimate private prior using Gaussian distribution."""
+
+    
+    sd = np.sqrt(overall_var)
+    low, up = stats.norm.interval(0.99, loc=overall_mean, scale=sd)
     
     low, up = max(np.min(Yarr), low), min(np.max(Yarr), up)
     print(f"Clipped range: [{low:.3f}, {up:.3f}]", flush=True)
@@ -138,11 +158,35 @@ def ind_prob_dist(Yarr, bins, mean, variance, eps1):
     inter = (Y_uniq.max() - Y_uniq.min()) / (len(Y_uniq) - 1)
 
     for i in range(n):
-        prob = stats.norm(mean[i], np.sqrt(variance[i]))
+        prob = stats.norm(loc=mean[i], scale=np.sqrt(variance[i]))
         prob_y[i, :] = prob.pdf(Y_uniq) * inter
-        prob_y[i, :] /= np.sum(prob_y[i, :])
+        # prob_y[i, :] /= np.sum(prob_y[i, :])
+        
+    # print(prob_y,flush=True)
     return Y_uniq, prob_y
 
+def real_opt_rr(args):
+    """Apply RR-on-bins algorithm to a subset of Y values (for real phenotypes)."""
+    Y, mean_dp,var_dp,bins, eps, rng, _ = args
+    n = Y.shape[0]
+
+    Y_priv = np.zeros(n, dtype=np.float32)
+    
+    std_dp = np.sqrt(var_dp)
+    # print(f"DP mean={mean_dp.astype('float32')[0]:.3f}, DP std={std_dp.astype('float32')[0]:.3f}", flush=True)
+
+    prob_map = norm_prob_dist(Y,mean_dp,std_dp, bins)
+    Y_uniq = np.fromiter(prob_map.keys(), dtype=np.float32)
+    prob_y = np.fromiter(prob_map.values(), dtype=float)
+
+    loss_mat, y_opt = create_opt_mat(prob_y, Y_uniq, eps)
+    mapping_mat, min_idx = compute_map(bins, loss_mat)
+    temp_y, label_cls = get_Yopt(y_opt, mapping_mat, min_idx, bins, eps)
+
+    Y_priv = save_RR_Yhat(label_cls, Y, Y_uniq, temp_y, eps, rng)
+    return Y_priv
+
+    
 def opt_rr(args):
     """Apply RR-on-bins algorithm to a subset of Y values (for parallel execution)."""
     prob_y, Y_uniq, Y, bins, eps, rng, _ = args
@@ -155,12 +199,11 @@ def opt_rr(args):
         temp_y, label_cls = get_Yopt(y_opt, mapping_mat, min_idx, bins, eps)
 
         idx = np.abs(Y_uniq - Y[i]).argmin()
-        if idx == len(Y_uniq):
-            idx=idx-1
-        Y_priv[i] = compute_RR_bins(temp_y[idx], label_cls, eps, rng)
         
+        Y_priv[i] = compute_RR_bins(temp_y[idx], label_cls, eps, rng)
+     
+   
     return Y_priv
-
 
 
 # RR-on-bins dynamic programming algorithm computation functions

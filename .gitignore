@@ -18,3 +18,7 @@ venv/
 # Project data and results folders (ignore all contents)
 data/
 results/
+
+# Output and log files
+*.out
+log/

@@ -265,3 +265,51 @@ python runLPMech.py \
     --eps 0.1
 ```
 
+## GOPHER-MultiLP Pipeline
+
+The `run_gopher_multiLP.sh` wrapper script orchestrates the **full GOPHER-MultLP workflow**, including:
+
+1. Differentially private (DP) mean and variance estimation of full phenotype vector  
+2. Subsampling individuals and phenotypes for PRScs
+3. GOPHER-LP phenotype privatization on subsampled phenotype vector
+4. PRS-CS polygenic score construction  based on GWAS results generated using Step 3 output.
+5. GOPHER-MultiLP mechanism for final DP phenotype generation  
+
+---
+
+### Script Overview
+
+```bash
+bash run_gopher_multiLP.sh \
+    <pheno_file> \
+    <pheno> \
+    <total_sample_size> \
+    <seed> \
+    <genotype_prefix> \
+    <bins> \
+    <subsample_size> \
+    <LD_reference> \
+    <pheno_type> \
+    <outdir> \
+    <eps1> <eps2> ...
+```
+### Usage Example
+
+```
+bash run_gopher_multiLP.sh \
+    ./data/phenotypes.txt \
+    Sim_Y_100 \
+    10000 \
+    1234 \
+    ./data/genotype \
+    80 \
+    1234 \
+    1KG \
+    sim \
+    ./results \
+    1.0 3.0 5.0
+```
+## GOPHER-All-in-One Pipeline
+
+The `run_gopher_all.sh` script provides an **end-to-end wrapper** that runs **GOPHER-LP, GOPHER-MultiLP, and GOPHER-MultiQP** in a single workflow. It computes differentially private (DP) mean and variance, subsamples phenotypes, calls PRS-CS, and generates final DP phenotypes across a list of privacy budgets (ε). It uses the same DP mean and variance across all the GOPHER methods.
+

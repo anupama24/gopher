@@ -9,11 +9,12 @@ from scipy.sparse.linalg import eigsh
 from scipy.linalg import eigh
 from scipy.special import logsumexp
 from cvxopt import solvers, matrix, spmatrix
+import mosek
 
 # --- Local imports ---
 from utils import *
 from rr_lp_utils import *
-
+ 
 def sample_pre_process(Xarr, Y_full, bins, mean_dp, var_dp, overall_mean_dp,overall_var,num_chunks, seed, pheno):
     """
     Prepare all pre-processing steps and matrices for the Multi-QP mechanism.
@@ -114,9 +115,14 @@ def computeGRM(Xstd):
 
 def prob_dist_Y(Yarr, bins, mean, variance,overall_mean_dp,overall_var):
     """Estimate private probability distribution for continuous phenotype Y."""
+    
     sd = np.sqrt(overall_var)
-    low, up = st.t.interval(0.99, df=len(Yarr)-1, loc=overall_mean_dp, scale=sd)
-    low, up = max(Yarr.min(), low), min(Yarr.max(), up)
+    
+    low, up = st.norm.interval(0.99, loc=overall_mean_dp, scale=sd)
+
+    low = max(np.min(Yarr), low)
+    up = min(np.max(Yarr), up)
+    
     print(f"Clipped range: [{low:.3f}, {up:.3f}]", flush=True)
     
     bin_edges = np.linspace(low, up, num=bins+1)
@@ -264,10 +270,10 @@ def opt_dca(A,B,E,sz_y,sz_yhat,eps,max_iter,optTol,num_chunks):
 
     Popt = matrix(A)
     
-    os.environ["OPENBLAS_NUM_THREADS"] = "16"
-    os.environ["OMP_NUM_THREADS"] = "16"
+    # os.environ["OPENBLAS_NUM_THREADS"] = "16"
+    # os.environ["OMP_NUM_THREADS"] = "16"
 
-    print("Set OpenBLAS to:", os.environ.get("OPENBLAS_NUM_THREADS"),flush=True)
+    # print("Set OpenBLAS to:", os.environ.get("OPENBLAS_NUM_THREADS"),flush=True)
     
     for itr in range(max_iter):
         H = E @ prevW
